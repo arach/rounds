@@ -4,9 +4,11 @@
 //
 // Scout knows a Claude Code session by its own id and gives it an address. A session it can
 // reach now (its reachability is "live") gets the note as a Scout ask, typed into the terminal
-// it runs in. Anything else (no Scout, a session Scout hasn't seen, one that's closed) leaves
-// the note to the notes hook, as before. In config, "scout": false turns this off, and
-// "scout": "wake" also reaches sessions Scout can resume, opening them again to hear the note.
+// it runs in. One that's closed (or Scout has never seen) hands the note to a new Claude
+// session in the same repo, through Scout, told whose work it was and where that session's
+// transcript is. Without Scout the note waits for the notes hook, as before. In config,
+// "scout": false turns this off, "scout": "wake" first tries reopening a session Scout can
+// resume, and "newSession": false keeps a closed session's notes waiting instead.
 //
 // The sent file is written before the ask, so the notes hook in that session (which the
 // Scout message itself runs) doesn't bring the note in a second time. A send that fails takes
@@ -14,7 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { DATA, loadConfig } from "./config.mjs";
+import { CLAUDE, DATA, loadConfig, repoOf } from "./config.mjs";
 import { which } from "./indexer.mjs";
 import { SENT, delivered, noteMessage } from "./notes.mjs";
 
@@ -66,6 +68,14 @@ const carrying = new Set();
 // Looked up at most once a minute per note, so a session Scout can't reach isn't asked about
 // on every sweep.
 const tried = new Map();
+// How each note's last try went, for its pin: "unreachable" (Scout has no open session to give
+// it to) or "failed" (Scout refused the send). Gone once it's sent; kept while the server runs.
+const outcome = new Map();
+export const scoutStatus = (id) => outcome.get(id) || null;
+const note = (c, what, why) => {
+  if (outcome.get(c.id)?.what !== what) log(`note ${c.id} ${what === "unreachable" ? "waits: Scout can't reach its session (it isn't open, or Scout has never seen it)" : `didn't go (${why})`}`);
+  outcome.set(c.id, { what, at: Date.now(), ...(why ? { why } : {}) });
+};
 
 /** Send one note to its session through Scout. Resolves to how it went; never throws. */
 export async function deliver(c, idx) {
@@ -78,32 +88,82 @@ export async function deliver(c, idx) {
   const unclaim = () => { try { if (JSON.parse(fs.readFileSync(sent, "utf8")).pending) fs.rmSync(sent, { force: true }); } catch {} changed(); };
   try {
     const to = await addressOf(sessionsOf(c.thread, idx), loadConfig().scout === "wake");
-    if (!to) return "unreachable";
+    if (!to) {
+      if (loadConfig().newSession !== false && (await toNewSession(c, idx, sent))) return "sent";
+      const first = !outcome.has(c.id);
+      note(c, "unreachable");
+      if (first) changed();
+      return "unreachable";
+    }
     if (delivered(c)) return "skipped"; // the hook got there while Scout was asked
     fs.mkdirSync(SENT, { recursive: true });
     fs.writeFileSync(sent, JSON.stringify({ delivery: "scout", pending: true, address: to.address, at: Date.now() }));
     changed();
     const { json, why } = await scout(["ask", "--to", to.address, "--label", "rounds", noteMessage([c])], 60e3);
     if (why) {
+      note(c, "failed", why);
       unclaim();
-      log(`note ${c.id} didn't go to ${to.address} (${why}); it waits for the next message there`);
       return "failed";
     }
     // the receipt's ids follow the task: scout wait <task>
     const ids = json?.receipt?.ids || {};
     const task = ids.invocationId || ids.flightId || json?.messageId || null;
     fs.writeFileSync(sent, JSON.stringify({ delivery: "scout", address: to.address, session: to.session, ...(task ? { task } : {}), at: Date.now() }));
+    outcome.delete(c.id);
     changed();
     tried.delete(c.id);
     log(`note ${c.id} sent to ${to.address}`);
     return "sent";
   } catch (e) {
+    note(c, "failed", String(e?.message || e));
     unclaim();
-    log(`note ${c.id}: ${e?.message || e}`);
     return "failed";
   } finally {
     carrying.delete(c.id);
   }
+}
+
+// The session that made the work is closed, and Scout can't reopen it (its worktree may be gone
+// too): a new Claude session in the same repo takes the note, told whose work it was and where
+// that session's transcript is, so it can read what was done. The note is still the person's
+// own words, so it goes as an ask that Scout follows like any other.
+async function toNewSession(c, idx, sent) {
+  const t = (idx.threads || []).find((x) => x.id === c.thread);
+  const cwd = t?.cwd;
+  if (!cwd) return false;
+  const repo = repoOf(cwd);
+  if (!fs.existsSync(repo)) return false;
+  const old = sessionsOf(c.thread, idx)[0];
+  const transcript = old && findTranscript(old);
+  const opener = [
+    `The user left a note in Rounds on work a Claude session did${t.title ? ` ("${t.title}")` : ""} in ${cwd}.`,
+    `That session is closed, so the note comes to you, in ${repo}.${transcript ? ` Its transcript is ${transcript}: read the end of it to see what it built.` : ""}`,
+    cwd !== repo && !fs.existsSync(cwd) ? `Its worktree (${cwd}) is gone; its work is in ${repo} or on its branch.` : "",
+    "The note:",
+  ].filter(Boolean).join("\n");
+  fs.mkdirSync(SENT, { recursive: true });
+  fs.writeFileSync(sent, JSON.stringify({ delivery: "scout-new", pending: true, at: Date.now() }));
+  changed();
+  const { json, why } = await scout(["ask", "--project", repo, "--harness", "claude", "--label", "rounds", noteMessage([c], undefined, { opener, final: true })], 120e3);
+  if (why) {
+    note(c, "failed", why);
+    try { if (JSON.parse(fs.readFileSync(sent, "utf8")).pending) fs.rmSync(sent, { force: true }); } catch {}
+    changed();
+    return false;
+  }
+  const ids = json?.receipt?.ids || {};
+  fs.writeFileSync(sent, JSON.stringify({ delivery: "scout-new", project: repo, ...(ids.targetAgentId ? { agent: ids.targetAgentId } : {}), ...(ids.invocationId || ids.flightId ? { task: ids.invocationId || ids.flightId } : {}), at: Date.now() }));
+  outcome.delete(c.id);
+  changed();
+  log(`note ${c.id}: its session is closed, so a new Claude session in ${repo} took it`);
+  return true;
+}
+
+// A Claude Code session's transcript, by its id, wherever its project folder is.
+function findTranscript(id) {
+  const root = path.join(CLAUDE, "projects");
+  try { for (const d of fs.readdirSync(root)) { const f = path.join(root, d, `${id}.jsonl`); if (fs.existsSync(f)) return f; } } catch {}
+  return null;
 }
 
 /** Every note still waiting from the last day, tried again: its session may be open by now. */

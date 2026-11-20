@@ -27,19 +27,31 @@ export function delivered(c) {
   return Date.now() - (s.at || 0) < 2 * 60e3;
 }
 
-/** The message a session gets for its notes: each one's words, the screen and the point. */
-export function noteMessage(notes, posts = readPosts()) {
+// A screen's own record in the store (written when it was kept), for one no post names: a screen
+// the session captured on its own.
+const shotOf = (hash) => read(path.join(STORE, "img", `${hash}.json`), null);
+const setOf = (hash) => (read(path.join(DATA, "index.json"), { sets: [] }).sets || []).find((s) => s.shots?.some((x) => x.hash === hash));
+
+/**
+ * The message a session gets for its notes: each one's words, the screen and the point.
+ * `opener` replaces the first line (a new session, say, is told whose work it is); with `final`,
+ * a session without the Rounds tools answers in its last message instead.
+ */
+export function noteMessage(notes, posts = readPosts(), { opener, final = false } = {}) {
   const lines = notes.map((c) => {
     const p = postOf(c, posts);
-    const shot = p?.shots?.find((s) => s.hash === c.hash);
+    const shot = p?.shots?.find((s) => s.hash === c.hash) || (String(c.page || "").startsWith("shot-") ? shotOf(c.hash) : null);
+    const caption = p?.caption || (shot && setOf(c.hash)?.caption);
     const where = shot
       ? `on the screen ${path.join(STORE, "img", `${shot.hash}.${shot.ext}`)} (${shot.w}x${shot.h}), pinned at x ${Math.round(c.x * shot.w)}, y ${Math.round(c.y * shot.h)}`
       : `on the page ${path.join(STORE, `${c.hash}.html`)}, pinned at x ${Math.round(c.x)}, y ${Math.round(c.y)} on the page at 1280 wide`;
-    return `- Note ${c.id}: "${c.text}" ${where}${p ? `, from your post "${p.caption}"` : ""}.`;
+    return `- Note ${c.id}: "${c.text}" ${where}${caption ? `, from when ${p ? "you posted" : "the session said"} "${caption}"` : ""}.`;
   });
   return [
-    `The user left ${notes.length === 1 ? "a note" : `${notes.length} notes`} on your work in Rounds:`,
+    opener || `The user left ${notes.length === 1 ? "a note" : `${notes.length} notes`} on your work in Rounds:`,
     ...lines,
-    "Treat each as a request about that screen. Look at it (crop around the pinned point), act on it, then answer with rounds_reply and the note's id.",
+    final
+      ? "Treat each as a request about that screen. Look at it (crop around the pinned point) and act on it. Then answer with rounds_reply and the note's id if you have that tool; otherwise say what you changed in your final message."
+      : "Treat each as a request about that screen. Look at it (crop around the pinned point), act on it, then answer with rounds_reply and the note's id.",
   ].join("\n");
 }

@@ -7,6 +7,10 @@ export type Comment = {
   thread: string | null; state: "queued" | "sent" | "kept"; delivery?: string;
   /** how it reaches its session: the desktop relay, the notes hook, Scout (while it carries it), or not at all */
   route?: "relay" | "hook" | "scout" | "kept"; threadTitle?: string | null;
+  /** while it waits: Scout's last try ("unreachable": no open session; "failed": the send was refused), whether Scout is on, whether the notes hook is installed */
+  scout?: "unreachable" | "failed"; scoutOn?: boolean; hook?: boolean;
+  /** the repo a new session took it in, when the session that made the work was closed */
+  sentTo?: string;
   reply?: { text: string; at: number };
 };
 export type Shot = { hash: string; ext: string; w: number; h: number; name: string };

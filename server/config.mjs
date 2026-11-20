@@ -10,6 +10,8 @@
 //     "relay": false,                 // Claude desktop app: a relay session delivers notes at once
 //     "scout": true,                  // with Scout installed, notes go to their live session at
 //                                     // once; false turns it off, "wake" also resumes closed ones
+//     "newSession": true,             // a closed session's note goes to a new Claude session in
+//                                     // its repo, through Scout; false keeps it waiting instead
 //     "captures": true                // screens sessions captured on their own (screenshots,
 //                                     // images they opened) show without being posted
 //   }
@@ -39,7 +41,7 @@ export const POSTS = path.join(DATA, "posts");
 export const PUSHES = path.join(DATA, "pushes");
 export const CONFIG = path.join(DATA, "config.json");
 
-const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false, scout: true, captures: true };
+const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false, scout: true, newSession: true, captures: true };
 
 export function loadConfig() {
   let c = {};
@@ -52,7 +54,7 @@ const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g
 // The repo a folder belongs to: the nearest parent holding .git, else the folder itself. A linked
 // worktree (its .git is a file naming the main repo's .git/worktrees/<name>) belongs to the main
 // checkout, so a branch's work sits with its project instead of becoming one of its own.
-function repoOf(dir) {
+export function repoOf(dir) {
   const found = gitRoot(dir);
   if (found) return found;
   // A worktree removed once its branch merged leaves its name (and sometimes an empty folder):

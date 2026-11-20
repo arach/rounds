@@ -99,9 +99,16 @@ after the worktree is gone.
 With [Scout](https://openscout.app) installed, a note goes straight to the session that made the
 work, the moment you pin it, when that session is open. Rounds looks the session up with
 `scout session address` and sends the note with `scout ask`, and the pin says it went through Scout.
-Otherwise, for example if Scout can't reach the session, the note comes with your next message
-there, as before. Rounds tries waiting notes again every half minute. Set `"scout": false` in
-the config to turn this off, or `"scout": "wake"` to also reopen sessions Scout can resume.
+
+When that session is closed, a new Claude session in the same repo takes the note, through
+`scout ask --project`. It's told which session made the work and where that session's
+transcript is, so it can read what was done before acting on the note. The pin says so.
+
+The pin always says where a note stands: sent, on its way, or waiting and why (Scout can't
+reach the session, or Scout refused the send). Rounds tries waiting notes again every half
+minute. Set `"scout": false` in the config to turn Scout off, `"scout": "wake"` to first reopen
+a session Scout can resume, or `"newSession": false` to keep a closed session's notes waiting
+for your next message there instead.
 
 ### Keys
 

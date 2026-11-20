@@ -12,7 +12,19 @@ import { buildIndex, keepImage, hasSips, which, DATA, STORE, IMG } from "./index
 import { pastPushes, importPushes } from "./history.mjs";
 import { applyMoves, fileTopics, filePostTopics, loadTopics } from "./topics.mjs";
 import { POSTS, projects, loadConfig } from "./config.mjs";
-import { deliver as byScout, sweep as scoutSweep, scoutOn } from "./scout.mjs";
+import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus } from "./scout.mjs";
+import { CLAUDE } from "./config.mjs";
+
+// Whether the notes hook is in Claude's settings: without it, a note Scout can't carry has no
+// other way to its session, and its pin mustn't promise "with your next message there".
+let hookSeen = { at: 0, on: false };
+function notesHook() {
+  if (Date.now() - hookSeen.at < 60e3) return hookSeen.on;
+  let on = false;
+  try { on = /[\\/]bin[\\/](rounds|workbench)\.mjs"? hook notes/.test(fs.readFileSync(path.join(CLAUDE, "settings.json"), "utf8")); } catch {}
+  hookSeen = { at: Date.now(), on };
+  return on;
+}
 
 const SHOTS = path.join(DATA, "shots");
 const SIZED = path.join(DATA, "sized");
@@ -191,7 +203,14 @@ function comments(idx) {
     const s = readJSON(path.join(SENT, `${c.id}.json`), null);
     // Scout is carrying it: on its way, not there yet (past two minutes the send never finished)
     if (s?.pending) { if (Date.now() - (s.at || 0) < 2 * 60e3) c.route = "scout"; continue; }
-    if (s) Object.assign(c, { state: "sent", delivery: s.delivery || "delivered" });
+    if (s) { Object.assign(c, { state: "sent", delivery: s.delivery || "delivered", ...(s.project ? { sentTo: path.basename(s.project) } : {}) }); continue; }
+    // still waiting: what Scout made of it last, and whether the hook could bring it instead
+    if (c.state === "queued" && c.route === "hook") {
+      const st = scoutStatus(c.id);
+      if (st) c.scout = st.what;
+      c.scoutOn = scoutOn();
+      c.hook = notesHook();
+    }
   }
   return list;
 }
@@ -202,13 +221,19 @@ function comments(idx) {
 function toScout(c, idx) {
   if (c.route === "hook" && c.state === "queued") byScout(c, idx).catch(() => {});
 }
-let sweeping = false;
-setInterval(() => {
-  if (sweeping || !scoutOn()) return;
-  sweeping = true;
-  const idx = withLivePosts(readJSON(path.join(DATA, "index.json"), { pages: [], threads: [], sets: [] }));
-  scoutSweep(comments(idx), idx).catch(() => {}).finally(() => (sweeping = false));
-}, 30e3).unref();
+// Started by the first request a server takes, never by importing this module: a `vite build`
+// loads it through the Vite config, and must neither send notes nor be kept alive by the timer.
+let sweeping = false, sweeper = null;
+function startSweep() {
+  if (sweeper) return;
+  sweeper = setInterval(() => {
+    if (sweeping || !scoutOn()) return;
+    sweeping = true;
+    const idx = withLivePosts(readJSON(path.join(DATA, "index.json"), { pages: [], threads: [], sets: [] }));
+    scoutSweep(comments(idx), idx).catch(() => {}).finally(() => (sweeping = false));
+  }, 30e3);
+  sweeper.unref();
+}
 
 // Posts that landed since the last index show at once; the next index ties them to their thread.
 function withLivePosts(idx) {
@@ -301,6 +326,7 @@ const fromHere = (req) => {
 };
 
 export async function handle(req, res, next) {
+        startSweep();
         const url = new URL(req.url, "http://x");
         const p = url.pathname;
         if (!p.startsWith("/api/")) return next();

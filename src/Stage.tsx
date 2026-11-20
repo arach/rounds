@@ -360,10 +360,16 @@ function Compare({ before, after, changes, pageH, scale, wipe, setWipe, animate 
 function whereTo(note: Comment) {
   const to = note.threadTitle ? `“${note.threadTitle}”` : "its session";
   if (note.reply) return note.threadTitle ? `“${note.threadTitle}” replied` : "Its session replied";
+  if (note.state === "sent" && note.delivery === "scout-new") return `${to} was closed, so a new session in ${note.sentTo || "its repo"} took it, through Scout`;
   if (note.state === "sent") return note.delivery === "scout" ? `Sent to ${to} through Scout` : `Sent to ${to}`;
   if (note.state === "kept" || note.route === "kept") return note.thread ? "Stays here: its session is no longer on this Mac" : "Stays here: no session made this";
   if (note.route === "relay") return `On its way to ${to}`;
   if (note.route === "scout") return `On its way to ${to} through Scout`;
+  const next = note.hook === false ? "" : ` It goes with your next message there.`;
+  if (note.scout === "unreachable") return `Waiting: Scout can't reach ${to}, it isn't open.${next || " Rounds tries again every half minute."}`;
+  if (note.scout === "failed") return `Scout couldn't send it to ${to}; trying again.${next}`;
+  if (note.scoutOn) return `Sending to ${to} through Scout…`;
+  if (note.hook === false) return `Waiting: nothing can reach ${to} yet`;
   return `Goes to ${to} with your next message there`;
 }
 
