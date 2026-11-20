@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { CLAUDE, DATA, loadConfig, repoOf } from "./config.mjs";
-import { which } from "./indexer.mjs";
+import { keepImage, which } from "./indexer.mjs";
 import { SENT, delivered, noteMessage } from "./notes.mjs";
 
 const log = (s) => console.log(`[rounds] scout: ${s}`);
@@ -68,13 +68,29 @@ const carrying = new Set();
 // Looked up at most once a minute per note, so a session Scout can't reach isn't asked about
 // on every sweep.
 const tried = new Map();
-// How each note's last try went, for its pin: "unreachable" (Scout has no open session to give
-// it to) or "failed" (Scout refused the send). Gone once it's sent; kept while the server runs.
-const outcome = new Map();
-export const scoutStatus = (id) => outcome.get(id) || null;
+// Each note's trail, kept in ~/.rounds/trail/<id>.json so its pin tells the same story after a
+// refresh or a restart: every step Scout took with it, oldest first. A step is
+//   { what: "unreachable" | "failed" | "sent" | "new-session" | "answered" | "unanswered", at, ... }
+// and a step repeated (the sweep finding a session still closed) is written once.
+const TRAIL = path.join(DATA, "trail");
+export function trailOf(id) {
+  try { return JSON.parse(fs.readFileSync(path.join(TRAIL, `${id}.json`), "utf8")); } catch { return []; }
+}
+function step(id, ev) {
+  const list = trailOf(id);
+  if (list.at(-1)?.what === ev.what && list.at(-1)?.why === ev.why) return false;
+  list.push({ ...ev, at: ev.at || Date.now() });
+  try { fs.mkdirSync(TRAIL, { recursive: true }); fs.writeFileSync(path.join(TRAIL, `${id}.json`), JSON.stringify(list, null, 1)); } catch {}
+  changed();
+  return true;
+}
+/** Why a note still waits, from its trail: its last step, if that was a miss. */
+export function scoutStatus(id) {
+  const last = trailOf(id).at(-1);
+  return last && (last.what === "unreachable" || last.what === "failed") ? last : null;
+}
 const note = (c, what, why) => {
-  if (outcome.get(c.id)?.what !== what) log(`note ${c.id} ${what === "unreachable" ? "waits: Scout can't reach its session (it isn't open, or Scout has never seen it)" : `didn't go (${why})`}`);
-  outcome.set(c.id, { what, at: Date.now(), ...(why ? { why } : {}) });
+  if (step(c.id, { what, ...(why ? { why } : {}) })) log(`note ${c.id} ${what === "unreachable" ? "waits: Scout can't reach its session (it isn't open, or Scout has never seen it)" : `didn't go (${why})`}`);
 };
 
 /** Send one note to its session through Scout. Resolves to how it went; never throws. */
@@ -90,9 +106,7 @@ export async function deliver(c, idx) {
     const to = await addressOf(sessionsOf(c.thread, idx), loadConfig().scout === "wake");
     if (!to) {
       if (loadConfig().newSession !== false && (await toNewSession(c, idx, sent))) return "sent";
-      const first = !outcome.has(c.id);
       note(c, "unreachable");
-      if (first) changed();
       return "unreachable";
     }
     if (delivered(c)) return "skipped"; // the hook got there while Scout was asked
@@ -109,8 +123,7 @@ export async function deliver(c, idx) {
     const ids = json?.receipt?.ids || {};
     const task = ids.invocationId || ids.flightId || json?.messageId || null;
     fs.writeFileSync(sent, JSON.stringify({ delivery: "scout", address: to.address, session: to.session, ...(task ? { task } : {}), at: Date.now() }));
-    outcome.delete(c.id);
-    changed();
+    step(c.id, { what: "sent", to: to.address, ...(task ? { task } : {}) });
     tried.delete(c.id);
     log(`note ${c.id} sent to ${to.address}`);
     return "sent";
@@ -152,9 +165,9 @@ async function toNewSession(c, idx, sent) {
     return false;
   }
   const ids = json?.receipt?.ids || {};
-  fs.writeFileSync(sent, JSON.stringify({ delivery: "scout-new", project: repo, ...(ids.targetAgentId ? { agent: ids.targetAgentId } : {}), ...(ids.invocationId || ids.flightId ? { task: ids.invocationId || ids.flightId } : {}), at: Date.now() }));
-  outcome.delete(c.id);
-  changed();
+  const task = ids.invocationId || ids.flightId || null;
+  fs.writeFileSync(sent, JSON.stringify({ delivery: "scout-new", project: repo, ...(ids.targetAgentId ? { agent: ids.targetAgentId } : {}), ...(task ? { task } : {}), at: Date.now() }));
+  step(c.id, { what: "new-session", project: repo, ...(task ? { task } : {}) });
   log(`note ${c.id}: its session is closed, so a new Claude session in ${repo} took it`);
   return true;
 }
@@ -171,4 +184,51 @@ export async function sweep(list, idx) {
   if (!scoutOn()) return;
   const day = Date.now() - 864e5;
   for (const c of list) if (c.at > day && c.state === "queued" && c.route !== "relay") await deliver(c, idx);
+  await follow(list);
+}
+
+// A session Scout gave a note to answers on the Scout task (a new session has no rounds_reply,
+// and its final message is the answer). Notes sent through Scout in the last three days with no
+// reply yet are looked up there; an answer becomes the note's reply, as if rounds_reply had
+// written it, with the screens it names kept in the store before their scratch folder goes.
+const COMMENTS = path.join(DATA, "comments.json");
+const IMAGE = /(?:file:\/\/)?(\/[^\s)'"`<>]+\.(?:png|jpe?g|webp|gif))/gi;
+const looked = new Map();
+async function follow(list) {
+  const since = Date.now() - 3 * 864e5;
+  for (const c of list) {
+    if (c.reply || !c.id) continue;
+    let s = null;
+    try { s = JSON.parse(fs.readFileSync(path.join(SENT, `${c.id}.json`), "utf8")); } catch {}
+    if (!s || s.pending || !s.task || !String(s.delivery).startsWith("scout") || (s.at || 0) < since) continue;
+    // a note sent before trails were kept gets its first step from its sent file
+    if (!trailOf(c.id).some((x) => x.what === "sent" || x.what === "new-session")) {
+      step(c.id, s.delivery === "scout-new" ? { what: "new-session", project: s.project, task: s.task, at: s.at } : { what: "sent", to: s.address, task: s.task, at: s.at });
+    }
+    if (Date.now() - (looked.get(c.id) || 0) < 60e3) continue;
+    looked.set(c.id, Date.now());
+    const { json } = await scout(["status", s.task], 30e3);
+    const work = (json?.work || []).find((w) => (w.handles || []).includes(s.task) || w.id === s.task);
+    if (!work) continue;
+    if (work.state === "completed" && work.answer) answer(c.id, String(work.answer), work.updatedAt);
+    else if (["failed", "cancelled", "canceled", "expired"].includes(work.state)) step(c.id, { what: "unanswered", why: work.reason || work.state });
+  }
+}
+
+function answer(id, said, at = Date.now()) {
+  const shots = [];
+  for (const m of said.matchAll(IMAGE)) {
+    const kept = keepImage(m[1]);
+    if (kept && !shots.some((x) => x.hash === kept.hash)) shots.push(kept);
+  }
+  // the paths themselves mean nothing on the canvas: the screens show under the reply instead
+  const text = said.replace(IMAGE, "").replace(/:\s*$/gm, "").replace(/[ \t]+$/gm, "").trim();
+  let list;
+  try { list = JSON.parse(fs.readFileSync(COMMENTS, "utf8")); } catch { return; }
+  const c = list.find((x) => x.id === id);
+  if (!c || c.reply) return;
+  c.reply = { text, at, via: "scout", ...(shots.length ? { shots } : {}) };
+  fs.writeFileSync(COMMENTS, JSON.stringify(list, null, 1));
+  step(id, { what: "answered", at, ...(shots.length ? { screens: shots.length } : {}) });
+  log(`note ${id} answered${shots.length ? `, with ${shots.length} screen${shots.length === 1 ? "" : "s"}` : ""}`);
 }

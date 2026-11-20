@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { clean, pageSrc, postComment, shot, thumb, threadLink, when, type Comment, type Index, type Page } from "./data";
+import { clean, img, pageSrc, postComment, shot, thumb, threadLink, when, type Comment, type Index, type Page, type TrailStep } from "./data";
 import { diffBoxes, type Box } from "./diff";
 import { blockChanges, type Changes } from "./blocks";
 import { Glyph } from "./glyphs";
@@ -359,6 +359,7 @@ function Compare({ before, after, changes, pageH, scale, wipe, setWipe, animate 
 /** Where a note goes, in a line: to its session now, with the next message there, or nowhere. */
 function whereTo(note: Comment) {
   const to = note.threadTitle ? `“${note.threadTitle}”` : "its session";
+  if (note.reply && note.delivery === "scout-new") return `A new session in ${note.sentTo || "its repo"} replied, for ${to}`;
   if (note.reply) return note.threadTitle ? `“${note.threadTitle}” replied` : "Its session replied";
   if (note.state === "sent" && note.delivery === "scout-new") return `${to} was closed, so a new session in ${note.sentTo || "its repo"} took it, through Scout`;
   if (note.state === "sent") return note.delivery === "scout" ? `Sent to ${to} through Scout` : `Sent to ${to}`;
@@ -371,6 +372,19 @@ function whereTo(note: Comment) {
   if (note.scoutOn) return `Sending to ${to} through Scout…`;
   if (note.hook === false) return `Waiting: nothing can reach ${to} yet`;
   return `Goes to ${to} with your next message there`;
+}
+
+/** One step of a note's trail, in a few words. */
+function trailLine(t: TrailStep) {
+  const base = (p?: string) => (p ? p.split("/").filter(Boolean).pop() : "its repo");
+  switch (t.what) {
+    case "unreachable": return "Scout couldn't reach its session";
+    case "failed": return `Scout couldn't send it${t.why ? `: ${t.why.slice(0, 80)}` : ""}`;
+    case "sent": return "sent to its session through Scout";
+    case "new-session": return `a new session in ${base(t.project)} took it`;
+    case "answered": return `answered${t.screens ? `, with ${t.screens} screen${t.screens === 1 ? "" : "s"}` : ""}`;
+    case "unanswered": return `ended without an answer${t.why ? ` (${t.why})` : ""}`;
+  }
 }
 
 export function Pin({ n, x, y, note, faded }: { n: number; x: number; y: number; note: Comment; faded: boolean }) {
@@ -390,8 +404,27 @@ export function Pin({ n, x, y, note, faded }: { n: number; x: number; y: number;
         <div className="glass thick absolute left-5 top-[-14px] w-72 rounded-[14px] px-3.5 py-3 text-[13px] leading-snug" style={{ animation: "wb-pop 220ms var(--ease-out) both" }}>
           {note.text}
           <div className="mt-2 text-[12px] text-[var(--muted)]">{whereTo(note)}</div>
-          {note.reply && <div className="mt-2.5 border-t border-[var(--faint)] pt-2.5">{note.reply.text}</div>}
-          <div className="type-mono mt-2 text-[11px] text-[var(--quiet)]">{when(note.reply?.at ?? note.at)}</div>
+          {note.reply && (
+            <div className="mt-2.5 max-h-72 overflow-y-auto whitespace-pre-line border-t border-[var(--faint)] pt-2.5">
+              {note.reply.text}
+              {!!note.reply.shots?.length && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {note.reply.shots.map((s) => (
+                    <a key={s.hash} href={img(s)} target="_blank" rel="noreferrer" title={s.name}>
+                      <img src={img(s, 240)} alt={s.name} className="h-14 rounded-md border border-[var(--faint)] object-cover" />
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {!!note.trail?.length && (
+            <ol className="type-mono mt-2.5 space-y-0.5 border-t border-[var(--faint)] pt-2 text-[11px] text-[var(--quiet)]">
+              <li>{when(note.at)} pinned</li>
+              {note.trail.map((t, i) => <li key={i}>{when(t.at)} {trailLine(t)}</li>)}
+            </ol>
+          )}
+          {!note.trail?.length && <div className="type-mono mt-2 text-[11px] text-[var(--quiet)]">{when(note.reply?.at ?? note.at)}</div>}
         </div>
       )}
       <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } }`}</style>

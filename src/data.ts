@@ -11,7 +11,13 @@ export type Comment = {
   scout?: "unreachable" | "failed"; scoutOn?: boolean; hook?: boolean;
   /** the repo a new session took it in, when the session that made the work was closed */
   sentTo?: string;
-  reply?: { text: string; at: number };
+  reply?: { text: string; at: number; via?: string; shots?: Shot[] };
+  /** every step Scout took with it, oldest first, kept in ~/.rounds/trail */
+  trail?: TrailStep[];
+};
+export type TrailStep = {
+  what: "unreachable" | "failed" | "sent" | "new-session" | "answered" | "unanswered";
+  at: number; why?: string; to?: string; project?: string; task?: string; screens?: number;
 };
 export type Shot = { hash: string; ext: string; w: number; h: number; name: string };
 /** A set of screens a thread showed him in one go, with the caption it gave them. */

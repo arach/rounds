@@ -105,7 +105,10 @@ When that session is closed, a new Claude session in the same repo takes the not
 transcript is, so it can read what was done before acting on the note. The pin says so.
 
 The pin always says where a note stands: sent, on its way, or waiting and why (Scout can't
-reach the session, or Scout refused the send). Rounds tries waiting notes again every half
+reach the session, or Scout refused the send). Each step is kept in `~/.rounds/trail`, so a
+refresh or a restart tells the same story, and the pin lists them. A session that answers on
+the Scout task instead of with `rounds_reply` (a new session has no Rounds tools) still gets
+its answer onto the pin, with the screens it names kept in the store. Rounds tries waiting notes again every half
 minute. Set `"scout": false` in the config to turn Scout off, `"scout": "wake"` to first reopen
 a session Scout can resume, or `"newSession": false` to keep a closed session's notes waiting
 for your next message there instead.

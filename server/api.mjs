@@ -12,7 +12,7 @@ import { buildIndex, keepImage, hasSips, which, DATA, STORE, IMG } from "./index
 import { pastPushes, importPushes } from "./history.mjs";
 import { applyMoves, fileTopics, filePostTopics, loadTopics } from "./topics.mjs";
 import { POSTS, projects, loadConfig } from "./config.mjs";
-import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus } from "./scout.mjs";
+import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus, trailOf } from "./scout.mjs";
 import { CLAUDE } from "./config.mjs";
 
 // Whether the notes hook is in Claude's settings: without it, a note Scout can't carry has no
@@ -199,6 +199,8 @@ function comments(idx) {
     c.threadTitle ||= threads.get(c.thread)?.title || null;
     // a note still waiting when its session left this Mac will never be heard: it stays here
     if (c.state === "queued" && threads.get(c.thread)?.gone) { c.state = "kept"; c.route = "kept"; }
+    const trail = trailOf(c.id);
+    if (trail.length) c.trail = trail;
     if (c.state === "sent") continue;
     const s = readJSON(path.join(SENT, `${c.id}.json`), null);
     // Scout is carrying it: on its way, not there yet (past two minutes the send never finished)
