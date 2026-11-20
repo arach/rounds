@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { clean, img, pageSrc, postComment, shot, thumb, threadLink, when, type Comment, type Index, type Page, type TrailStep } from "./data";
 import { diffBoxes, type Box } from "./diff";
 import { blockChanges, type Changes } from "./blocks";
@@ -389,46 +390,96 @@ function trailLine(t: TrailStep) {
 
 export function Pin({ n, x, y, note, faded }: { n: number; x: number; y: number; note: Comment; faded: boolean }) {
   const [hover, setHover] = useState(false);
+  const [open, setOpen] = useState(false);
   const kept = note.state === "kept" && !note.reply;
   const done = note.state === "sent" || !!note.reply;
   return (
     <div className="absolute" style={{ left: x, top: y, opacity: faded ? 0.5 : 1 }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-      <div
-        className="type-mono absolute grid h-7 min-w-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full px-1.5 text-[12px] font-medium text-white"
-        style={{ background: kept ? "var(--quiet)" : "var(--honey)", boxShadow: "0 0 0 3px rgba(255,255,255,0.9), var(--shadow-glass)", animation: "wb-pin 420ms var(--spring) both" }}
-        aria-label={`Note ${n}: ${whereTo(note)}`}
+      <button
+        type="button"
+        className="type-mono absolute grid h-7 min-w-7 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full px-1.5 text-[12px] font-medium text-white"
+        style={{ background: kept ? "var(--quiet)" : "var(--honey)", boxShadow: open ? "0 0 0 3px var(--ink), var(--shadow-glass)" : "0 0 0 3px rgba(255,255,255,0.9), var(--shadow-glass)", animation: "wb-pin 420ms var(--spring) both" }}
+        aria-label={`Note ${n}: ${whereTo(note)}. ${open ? "Close" : "Open"} it`}
+        aria-expanded={open}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); setHover(false); }}
       >
         {done ? <Glyph name="done" size={13} /> : n}
-      </div>
-      {hover && (
-        <div className="glass thick absolute left-5 top-[-14px] w-72 rounded-[14px] px-3.5 py-3 text-[13px] leading-snug" style={{ animation: "wb-pop 220ms var(--ease-out) both" }}>
+      </button>
+      {hover && !open && (
+        <div className="glass dock absolute left-5 top-[-14px] w-80 rounded-[14px] px-4 py-3 text-[14px] leading-snug" style={{ animation: "wb-pop 220ms var(--ease-out) both" }}>
           {note.text}
-          <div className="mt-2 text-[12px] text-[var(--muted)]">{whereTo(note)}</div>
-          {note.reply && (
-            <div className="mt-2.5 max-h-72 overflow-y-auto whitespace-pre-line border-t border-[var(--faint)] pt-2.5">
-              {note.reply.text}
-              {!!note.reply.shots?.length && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {note.reply.shots.map((s) => (
-                    <a key={s.hash} href={img(s)} target="_blank" rel="noreferrer" title={s.name}>
-                      <img src={img(s, 240)} alt={s.name} className="h-14 rounded-md border border-[var(--faint)] object-cover" />
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {!!note.trail?.length && (
-            <ol className="type-mono mt-2.5 space-y-0.5 border-t border-[var(--faint)] pt-2 text-[11px] text-[var(--quiet)]">
-              <li>{when(note.at)} pinned</li>
-              {note.trail.map((t, i) => <li key={i}>{when(t.at)} {trailLine(t)}</li>)}
-            </ol>
-          )}
-          {!note.trail?.length && <div className="type-mono mt-2 text-[11px] text-[var(--quiet)]">{when(note.reply?.at ?? note.at)}</div>}
+          <div className="mt-2 text-[12.5px] text-[var(--muted)]">{whereTo(note)}</div>
+          {note.reply && <div className="mt-2.5 line-clamp-4 border-t border-[var(--faint)] pt-2.5">{note.reply.text}</div>}
+          <div className="type-mono mt-2 text-[11px] text-[var(--quiet)]">
+            {when(note.reply?.at ?? note.at)}{(note.reply || note.trail?.length) ? " · click the pin to read it all" : ""}
+          </div>
         </div>
       )}
-      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } }`}</style>
+      {open && <NotePanel n={n} note={note} onClose={() => setOpen(false)} />}
+      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } }`}</style>
     </div>
+  );
+}
+
+/**
+ * A note opened to read: the whole answer, its screens at a size you can see, and every step
+ * it took. Drawn over the window's right side, outside the stage, so the screen's zoom and
+ * edges never shrink or clip it, on a solid sheet so a dark screen behind never muddies it.
+ */
+function NotePanel({ n, note, onClose }: { n: number; note: Comment; onClose: () => void }) {
+  useEffect(() => {
+    // Esc closes this first, before it backs out of the stage
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); onClose(); } };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [onClose]);
+  return createPortal(
+    <aside
+      role="dialog"
+      aria-label={`Note ${n}`}
+      className="fixed bottom-28 right-6 top-6 z-50 flex w-[min(460px,calc(100vw-48px))] flex-col overflow-hidden rounded-[18px] border border-[var(--faint)] text-[var(--ink)]"
+      style={{ background: "var(--wall)", boxShadow: "var(--shadow-lift)", animation: "wb-panel 240ms var(--ease-out) both" }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+    >
+      <header className="flex items-start gap-3 border-b border-[var(--faint)] px-5 py-4">
+        <span className="type-mono mt-0.5 grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[11px] font-medium text-white" style={{ background: "var(--honey)" }}>{n}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[16px] font-medium leading-snug">{note.text}</div>
+          <div className="mt-1 text-[13px] text-[var(--muted)]">{whereTo(note)}</div>
+        </div>
+        <button type="button" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-colors hover:bg-black/5" aria-label="Close">
+          <Glyph name="close" size={14} />
+        </button>
+      </header>
+      <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+        {note.reply ? (
+          <>
+            <div className="whitespace-pre-line text-[15px] leading-[1.6]">{note.reply.text}</div>
+            {!!note.reply.shots?.length && (
+              <div className="mt-4 space-y-3">
+                {note.reply.shots.map((s) => (
+                  <a key={s.hash} href={img(s)} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-[10px] border border-[var(--faint)] transition-opacity hover:opacity-90" title="Open it full size">
+                    <img src={img(s, 960)} alt={s.name} className="block max-h-[420px] w-full object-cover object-top" />
+                  </a>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-[14px] text-[var(--muted)]">No answer yet.</div>
+        )}
+        {!!note.trail?.length && (
+          <ol className="type-mono mt-5 space-y-1 border-t border-[var(--faint)] pt-3 text-[12px] text-[var(--muted)]">
+            <li>{when(note.at)} pinned</li>
+            {note.trail.map((t, i) => <li key={i}>{when(t.at)} {trailLine(t)}</li>)}
+          </ol>
+        )}
+      </div>
+    </aside>,
+    document.body,
   );
 }
 
