@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import readline from "node:readline";
 import { execFileSync } from "node:child_process";
 
-import { HOME, DATA, STORE, IMG, POSTS, PUSHES, CLAUDE, DESKTOP_SESSIONS, projects } from "./config.mjs";
+import { HOME, DATA, STORE, IMG, POSTS, PUSHES, CLAUDE, DESKTOP_SESSIONS, projects, loadConfig } from "./config.mjs";
 import { filePostTopics } from "./topics.mjs";
 export { DATA, STORE, IMG };
 const TRANSCRIPTS = path.join(CLAUDE, "projects");
@@ -80,6 +80,17 @@ const CWD_RE = /"cwd":"((?:[^"\\]|\\.)*)"/;
 // A Rounds post made through the MCP server: the result names the post it made.
 const POST_RE = /\bpost ([a-f0-9]{16})\b/;
 
+// A few screens a turn at most: the last of each subject, which is how it ended up.
+const CAPTURES_PER_TURN = 3;
+// What the session told the person at the end of the turn, as a caption: its first paragraph,
+// plain, a couple of sentences long.
+function captionOf(text) {
+  const p = String(text || "").split(/\n\s*\n/).map((s) => s.trim()).find((s) => s && !/^(```|\||#|-{3})/.test(s)) || "";
+  const plain = p.replace(/\*\*|__|`|^#+\s*|\[([^\]]+)\]\([^)]+\)/gm, "$1").replace(/\s+/g, " ").trim();
+  if (!plain) return "Captured while working";
+  return plain.length > 280 ? `${plain.slice(0, 277).replace(/\s+\S*$/, "")}…` : plain;
+}
+
 async function readTranscript(file, onPublish, onDay, onSend, onMeta = () => {}, onPost = () => {}) {
   const files = new Map(); // path -> reconstructed text, or null when unknown
   const posting = new Set(); // tool_use ids of Rounds posts
@@ -87,11 +98,57 @@ async function readTranscript(file, onPublish, onDay, onSend, onMeta = () => {},
   let lastLine = "";
   const pending = new Map(); // tool_use id -> publish
   const sending = new Map(); // tool_use id -> a set of screens shown to him
+
+  // Screens the session captured on its own, with no one asking it to show them: a screenshot,
+  // an image it opened to look at. Every tool result that carries an image is a candidate (the
+  // transcript keeps the image itself, so it outlives the file it was saved to). A turn ends
+  // when the person speaks again; then the last screen of each subject (a page's address, or
+  // the folder an image came from) is kept, a few at most, captioned with what the session
+  // last told the person. A subject kept earlier in the session gives the before.
+  const captures = loadConfig().captures !== false;
+  const uses = new Map(); // tool_use id -> { name, file }
+  const seenResults = new Set();
+  let turn = new Map(); // subject -> candidate, in the order last seen
+  let said = "";
+  const lastOf = new Map(); // subject -> the last screen kept for it
+  const flush = () => {
+    if (turn.size) {
+      const kept = [...turn.values()].slice(-CAPTURES_PER_TURN);
+      const before = kept.map((k) => { const p = lastOf.get(k.subject); return p && p.hash !== k.hash ? p.img : null; });
+      onSend({ id: `capture:${kept[0].id}`, shots: kept.map((k) => k.img), ...(before.every(Boolean) ? { before } : {}), caption: captionOf(said), cwd: meta.cwd, at: kept[kept.length - 1].at, captured: true });
+      for (const k of kept) { lastOf.delete(k.subject); lastOf.set(k.subject, k); }
+      while (lastOf.size > 40) lastOf.delete(lastOf.keys().next().value);
+    }
+    turn = new Map();
+    said = "";
+  };
+  const candidate = (c, img, row) => {
+    const use = uses.get(c.tool_use_id) || {};
+    if (c.is_error || /rounds_|workbench_|SendUserFile/.test(use.name || "")) return; // counted on their own
+    const buf = Buffer.from(img.source.data, "base64");
+    const d = dims(buf, "");
+    if (!d || d.w < 320 || d.h < 200) return; // icons, thumbnails, crops
+    const text = c.content.filter((x) => x.type === "text").map((x) => x.text || "").join("\n");
+    const url = text.match(/"url"\s*:\s*"([^"]+)"/)?.[1];
+    let subject = "";
+    try { if (url) { const u = new URL(url); subject = u.host + u.pathname; } } catch {}
+    subject ||= use.file ? path.dirname(use.file) : use.name || "screen";
+    // the original when it's still on disk (full size); else the copy the transcript keeps
+    const saved = text.match(/"outputPath"\s*:\s*"([^"]+)"/)?.[1];
+    const source = text.match(/\[Image: source: ([^\]]+)\]/)?.[1];
+    const orig = [saved, use.file, source].find((f) => f && /\.(png|jpe?g|webp)$/i.test(f) && fs.existsSync(f));
+    const ext = { "image/png": "png", "image/webp": "webp" }[img.source.media_type] || "jpg";
+    const name = path.basename(orig || saved || use.file || "capture").replace(/\.[^.]+$/, "");
+    turn.delete(subject);
+    turn.set(subject, { id: c.tool_use_id, subject, hash: sha(img.source.data), at: Date.parse(row.timestamp) || 0, img: orig || { buf, ext, name } });
+  };
+
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
   for await (const line of rl) {
     // A prompt he typed: a user row that is not a tool result. Counted per day, cheaply.
     if (line.startsWith('{"parentUuid"') || line.includes('"type":"user"')) {
       if (line.includes('"type":"user"') && !line.includes("tool_result") && !line.includes('"isMeta":true')) {
+        flush();
         const m = line.match(DAY_RE);
         if (m) onDay(localDay(m[1]));
         // a session with no desktop record is named for its first prompt
@@ -109,14 +166,25 @@ async function readTranscript(file, onPublish, onDay, onSend, onMeta = () => {},
     if (!meta.cwd) { const m = line.match(CWD_RE); if (m) meta.cwd = JSON.parse(`"${m[1]}"`); }
     lastLine = line;
     if (line.startsWith('{"type":"summary"')) { try { meta.summary = JSON.parse(line).summary || meta.summary; } catch {} }
+    // what the session says to the person: the last of it in a turn captions its screens
+    if (captures && line.includes('"role":"assistant"') && line.includes('"type":"text"')) {
+      try { for (const c of JSON.parse(line).message?.content || []) if (c.type === "text" && c.text?.trim()) said = c.text; } catch {}
+    }
     if (!line.includes("tool_")) continue;
+    // the request copy of a turn repeats its tool results; the transcript's own row has the time
+    if (line.startsWith('{"type":"api-request-blob"')) continue;
     let row;
     try { row = JSON.parse(line); } catch { continue; }
     const content = row.message?.content;
     if (!Array.isArray(content)) continue;
     for (const c of content) {
+      if (captures && c.type === "tool_result" && Array.isArray(c.content) && !seenResults.has(c.tool_use_id)) {
+        const img = c.content.find((x) => x.type === "image" && x.source?.type === "base64" && x.source.data);
+        if (img) { seenResults.add(c.tool_use_id); candidate(c, img, row); }
+      }
       if (c.type === "tool_use") {
         const i = c.input || {};
+        if (captures) uses.set(c.id, { name: c.name, file: typeof i.file_path === "string" ? i.file_path : typeof i.path === "string" ? i.path : "" });
         if (c.name === "Write" && i.file_path && typeof i.content === "string") files.set(i.file_path, i.content);
         else if (c.name === "Edit" && i.file_path) files.set(i.file_path, applyEdit(files.get(i.file_path), i));
         else if (c.name === "MultiEdit" && i.file_path) {
@@ -159,6 +227,7 @@ async function readTranscript(file, onPublish, onDay, onSend, onMeta = () => {},
       }
     }
   }
+  flush();
   { const m = lastLine.match(DAY_RE); if (m) meta.at = Date.parse(m[1]) || 0; }
   onMeta(meta);
 }
@@ -175,7 +244,7 @@ function dims(buf, file) {
       o += 2 + buf.readUInt16BE(o + 2);
     }
   }
-  if (!hasSips()) return null;
+  if (!file || !hasSips()) return null; // bytes with no file behind them: only the header can say
   try {
     const out = execFileSync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file], { encoding: "utf8" });
     return { w: Number(out.match(/pixelWidth: (\d+)/)[1]), h: Number(out.match(/pixelHeight: (\d+)/)[1]) };
@@ -184,15 +253,20 @@ function dims(buf, file) {
 
 // A screen a session showed, copied into the store by its content so it outlives the scratchpad
 // it was saved to.
+// A file's path, or a screen read out of a transcript: { buf, name, ext }.
 export function keepImage(file) {
   let buf;
-  try {
+  if (file && typeof file === "object") {
+    buf = file.buf;
+    if (!buf?.length || buf.length > 40e6) return null;
+  } else try {
     const st = fs.statSync(file);
     if (!st.isFile() || st.size > 40e6) return null;
     buf = fs.readFileSync(file);
   } catch { return null; }
   const hash = crypto.createHash("sha1").update(buf).digest("hex").slice(0, 16);
-  const ext = path.extname(file).slice(1).toLowerCase().replace("jpeg", "jpg");
+  const ext = typeof file === "object" ? file.ext : path.extname(file).slice(1).toLowerCase().replace("jpeg", "jpg");
+  if (typeof file === "object") file = file.name;
   const dest = path.join(IMG, `${hash}.${ext}`);
   const metaFile = path.join(IMG, `${hash}.json`);
   if (fs.existsSync(metaFile)) {
@@ -357,13 +431,16 @@ export async function buildIndex({ log = () => {} } = {}) {
       if (dup) { if (threads.has(threadId) && !threads.has(dup.thread)) dup.thread = threadId; return; }
       const thread = threads.get(threadId);
       if (byCli.has(cli) && !thread) return; // its desktop thread was kept off the canvas
-      if (P.isPrivate(send.caption, send.cwd, send.shots.join(" "), thread?.title, thread?.cwd)) return;
+      const named = (f) => (typeof f === "object" ? f.name : f);
+      if (P.isPrivate(send.caption, send.cwd, send.shots.map(named).join(" "), thread?.title, thread?.cwd)) return;
       const shots = [];
       for (const f of send.shots) {
         const m = keepImage(f);
         if (m && !shots.some((x) => x.hash === m.hash)) shots.push(m);
       }
       if (!shots.length) return;
+      // a capture's before, one per screen, when every screen has one
+      const before = send.before?.length === send.shots.length && shots.length === send.shots.length ? send.before.map(keepImage) : [];
       sets.push({
         id: sha(send.id),
         thread: threadId,
@@ -373,6 +450,8 @@ export async function buildIndex({ log = () => {} } = {}) {
         at: send.at,
         caption: send.caption,
         shots,
+        ...(before.length && before.every(Boolean) ? { before } : {}),
+        ...(send.captured ? { captured: true } : {}),
       });
     }, (meta) => {
       if (!threads.has(threadId)) cliMeta.set(threadId, meta);

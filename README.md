@@ -84,6 +84,16 @@ other ties posts to their session and notices pushes to main.
 
 In auto mode, Claude Code may ask you before acting on a note. Say yes and it carries on.
 
+### Without posting
+
+Sessions don't have to post anything. Every screenshot a session takes, and every image it opens
+to look at, is in its transcript, so Rounds finds them on its own, including in sessions from
+before you installed it. For each turn it keeps the last screen of each page or folder, a few
+at most, captioned with what the session told you at the end of the turn. A screen of the same
+page from earlier in the session becomes its before. Set `"captures": false` in the config to
+show only what sessions post. Work from a worktree sits with the repo it was cut from, even
+after the worktree is gone.
+
 ### Scout
 
 With [Scout](https://openscout.app) installed, a note goes straight to the session that made the

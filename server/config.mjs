@@ -8,8 +8,10 @@
 //     "home": "Studio",               // the name for work with no project (a home folder)
 //     "port": 4797,
 //     "relay": false,                 // Claude desktop app: a relay session delivers notes at once
-//     "scout": true                   // with Scout installed, notes go to their live session at
+//     "scout": true,                  // with Scout installed, notes go to their live session at
 //                                     // once; false turns it off, "wake" also resumes closed ones
+//     "captures": true                // screens sessions captured on their own (screenshots,
+//                                     // images they opened) show without being posted
 //   }
 // A project is matched by its rules first (thread name, folder, caption), then, with "folders"
 // on, by the git repo (or folder) the session ran in.
@@ -37,7 +39,7 @@ export const POSTS = path.join(DATA, "posts");
 export const PUSHES = path.join(DATA, "pushes");
 export const CONFIG = path.join(DATA, "config.json");
 
-const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false, scout: true };
+const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false, scout: true, captures: true };
 
 export function loadConfig() {
   let c = {};
@@ -47,14 +49,42 @@ export function loadConfig() {
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "work";
 
-// The repo a folder belongs to: the nearest parent holding .git, else the folder itself.
+// The repo a folder belongs to: the nearest parent holding .git, else the folder itself. A linked
+// worktree (its .git is a file naming the main repo's .git/worktrees/<name>) belongs to the main
+// checkout, so a branch's work sits with its project instead of becoming one of its own.
 function repoOf(dir) {
+  const found = gitRoot(dir);
+  if (found) return found;
+  // A worktree removed once its branch merged leaves its name (and sometimes an empty folder):
+  // the repo beside it whose name begins it (<repo>-<branch>, the longest such) is the one it
+  // was cut from.
+  const parent = path.dirname(dir), base = path.basename(dir);
+  let best = "";
+  try {
+    for (const n of fs.readdirSync(parent)) {
+      if (n.length > best.length && base.startsWith(`${n}-`) && fs.existsSync(path.join(parent, n, ".git"))) best = n;
+    }
+  } catch {}
+  return (best && gitRoot(path.join(parent, best))) || dir;
+}
+
+function gitRoot(dir) {
   let d = dir;
   for (let i = 0; i < 12 && d && d !== path.dirname(d); i++) {
-    if (fs.existsSync(path.join(d, ".git"))) return d;
+    const git = path.join(d, ".git");
+    if (fs.existsSync(git)) {
+      try {
+        if (fs.statSync(git).isFile()) {
+          const to = fs.readFileSync(git, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+          const main = to && path.resolve(d, to).split(`${path.sep}.git${path.sep}worktrees${path.sep}`);
+          if (main?.length === 2 && fs.existsSync(main[0])) return main[0];
+        }
+      } catch {}
+      return d;
+    }
     d = path.dirname(d);
   }
-  return dir;
+  return null;
 }
 
 /** One function for every caller: which project a thing belongs to, and every project's name. */
