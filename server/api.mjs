@@ -1,7 +1,8 @@
 // The local API for Rounds, mounted into Vite's dev server: the index, page snapshots, rendered
 // shots, and comments. With the relay on ("relay": true in config), a note on a desktop thread is
 // written to the data folder's inbox; the relay session delivers it to its thread and writes
-// sent/<id>.json beside it.
+// sent/<id>.json beside it. With Scout installed, a note on a Claude Code session goes to that
+// session at once through Scout (server/scout.mjs) when Scout can reach it.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,7 @@ import { buildIndex, keepImage, hasSips, which, DATA, STORE, IMG } from "./index
 import { pastPushes, importPushes } from "./history.mjs";
 import { applyMoves, fileTopics, filePostTopics, loadTopics } from "./topics.mjs";
 import { POSTS, projects, loadConfig } from "./config.mjs";
+import { deliver as byScout, sweep as scoutSweep, scoutOn } from "./scout.mjs";
 
 const SHOTS = path.join(DATA, "shots");
 const SIZED = path.join(DATA, "sized");
@@ -187,10 +189,26 @@ function comments(idx) {
     if (c.state === "queued" && threads.get(c.thread)?.gone) { c.state = "kept"; c.route = "kept"; }
     if (c.state === "sent") continue;
     const s = readJSON(path.join(SENT, `${c.id}.json`), null);
+    // Scout is carrying it: on its way, not there yet (past two minutes the send never finished)
+    if (s?.pending) { if (Date.now() - (s.at || 0) < 2 * 60e3) c.route = "scout"; continue; }
     if (s) Object.assign(c, { state: "sent", delivery: s.delivery || "delivered" });
   }
   return list;
 }
+
+// A note on a Claude Code session goes to it through Scout when Scout can reach it now; one it
+// can't stays with the hook. Notes still waiting are tried again every half minute, for a
+// session that has opened since, or a note whose session the canvas has only now traced.
+function toScout(c, idx) {
+  if (c.route === "hook" && c.state === "queued") byScout(c, idx).catch(() => {});
+}
+let sweeping = false;
+setInterval(() => {
+  if (sweeping || !scoutOn()) return;
+  sweeping = true;
+  const idx = withLivePosts(readJSON(path.join(DATA, "index.json"), { pages: [], threads: [], sets: [] }));
+  scoutSweep(comments(idx), idx).catch(() => {}).finally(() => (sweeping = false));
+}, 30e3).unref();
 
 // Posts that landed since the last index show at once; the next index ties them to their thread.
 function withLivePosts(idx) {
@@ -373,6 +391,7 @@ export async function handle(req, res, next) {
                 route: route(to), threadTitle: thread?.title || null,
               };
               fs.writeFileSync(COMMENTS, JSON.stringify([...readJSON(COMMENTS, []), comment], null, 1));
+              toScout(comment, idx);
               if (comment.route === "relay") {
                 fs.writeFileSync(path.join(INBOX, `${comment.id}.json`), JSON.stringify({
                   ...comment,
@@ -403,6 +422,7 @@ export async function handle(req, res, next) {
               threadTitle: thread?.title || null,
             };
             fs.writeFileSync(COMMENTS, JSON.stringify([...readJSON(COMMENTS, []), comment], null, 1));
+            toScout(comment, idx);
             if (comment.route === "relay") {
               fs.writeFileSync(path.join(INBOX, `${comment.id}.json`), JSON.stringify({
                 ...comment,

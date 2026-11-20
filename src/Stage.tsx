@@ -360,9 +360,10 @@ function Compare({ before, after, changes, pageH, scale, wipe, setWipe, animate 
 function whereTo(note: Comment) {
   const to = note.threadTitle ? `“${note.threadTitle}”` : "its session";
   if (note.reply) return note.threadTitle ? `“${note.threadTitle}” replied` : "Its session replied";
-  if (note.state === "sent") return `Sent to ${to}`;
+  if (note.state === "sent") return note.delivery === "scout" ? `Sent to ${to} through Scout` : `Sent to ${to}`;
   if (note.state === "kept" || note.route === "kept") return note.thread ? "Stays here: its session is no longer on this Mac" : "Stays here: no session made this";
   if (note.route === "relay") return `On its way to ${to}`;
+  if (note.route === "scout") return `On its way to ${to} through Scout`;
   return `Goes to ${to} with your next message there`;
 }
 

@@ -61,7 +61,8 @@ If nothing visible changed, record just the range and the summary.
 ## Notes from the user
 
 The user pins notes on your screens and pages. New ones arrive with their next message (a hook
-adds them, only the ones on your own work), or call `rounds_notes`. Each names the screen (an image path) and the point they
+adds them, only the ones on your own work), or at once as a Scout message when Scout is
+installed, or call `rounds_notes`. Each names the screen (an image path) and the point they
 pinned: look at the image around that point to see what they mean.
 
 Treat a note as a request from the user about that screen. Do what it asks, post the result

@@ -84,6 +84,15 @@ other ties posts to their session and notices pushes to main.
 
 In auto mode, Claude Code may ask you before acting on a note. Say yes and it carries on.
 
+### Scout
+
+With [Scout](https://openscout.app) installed, a note goes straight to the session that made the
+work, the moment you pin it, when that session is open. Rounds looks the session up with
+`scout session address` and sends the note with `scout ask`, and the pin says it went through Scout.
+Otherwise, for example if Scout can't reach the session, the note comes with your next message
+there, as before. Rounds tries waiting notes again every half minute. Set `"scout": false` in
+the config to turn this off, or `"scout": "wake"` to also reopen sessions Scout can resume.
+
 ### Keys
 
 | Key | Does |
@@ -106,7 +115,8 @@ the days. Drop an image or an HTML file on the canvas to add it to a project.
 {
   "projects": [{ "key": "shop", "name": "Shop", "match": ["shop", "storefront"] }],
   "private": ["acme-internal"],
-  "port": 4797
+  "port": 4797,
+  "scout": true
 }
 ```
 

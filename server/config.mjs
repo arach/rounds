@@ -7,7 +7,9 @@
 //     "folders": true,                // unmatched work is named for its repo folder
 //     "home": "Studio",               // the name for work with no project (a home folder)
 //     "port": 4797,
-//     "relay": false                  // Claude desktop app: a relay session delivers notes at once
+//     "relay": false,                 // Claude desktop app: a relay session delivers notes at once
+//     "scout": true                   // with Scout installed, notes go to their live session at
+//                                     // once; false turns it off, "wake" also resumes closed ones
 //   }
 // A project is matched by its rules first (thread name, folder, caption), then, with "folders"
 // on, by the git repo (or folder) the session ran in.
@@ -35,7 +37,7 @@ export const POSTS = path.join(DATA, "posts");
 export const PUSHES = path.join(DATA, "pushes");
 export const CONFIG = path.join(DATA, "config.json");
 
-const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false };
+const DEFAULTS = { projects: [], private: [], folders: true, home: "Studio", port: 4797, relay: false, scout: true };
 
 export function loadConfig() {
   let c = {};

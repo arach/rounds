@@ -5,8 +5,8 @@ export type Thread = { id: string; title: string; cwd: string; archived: boolean
 export type Comment = {
   id: string; page: string; hash: string; x: number; y: number; text: string; at: number;
   thread: string | null; state: "queued" | "sent" | "kept"; delivery?: string;
-  /** how it reaches its session: the desktop relay, the notes hook, or not at all */
-  route?: "relay" | "hook" | "kept"; threadTitle?: string | null;
+  /** how it reaches its session: the desktop relay, the notes hook, Scout (while it carries it), or not at all */
+  route?: "relay" | "hook" | "scout" | "kept"; threadTitle?: string | null;
   reply?: { text: string; at: number };
 };
 export type Shot = { hash: string; ext: string; w: number; h: number; name: string };

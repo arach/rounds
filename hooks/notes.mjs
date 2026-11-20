@@ -8,7 +8,8 @@
 // get only their own. Each note is delivered once.
 import fs from "node:fs";
 import path from "node:path";
-import { DATA, POSTS, STORE } from "../server/config.mjs";
+import { DATA } from "../server/config.mjs";
+import { SENT, delivered, noteMessage, postOf as postIn, readPosts } from "../server/notes.mjs";
 
 const read = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 let input = {};
@@ -16,8 +17,7 @@ try { input = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); } catch {}
 const session = input.session_id || "";
 
 const comments = read(path.join(DATA, "comments.json"), []);
-const SENT = path.join(DATA, "sent"), INBOX = path.join(DATA, "inbox");
-const delivered = (c) => c.state === "sent" || fs.existsSync(path.join(SENT, `${c.id}.json`));
+const INBOX = path.join(DATA, "inbox");
 // A note the desktop relay is carrying is the relay's for its first five minutes: the relay's
 // own message to the session runs this hook too, and the note would arrive twice. Past that the
 // relay isn't running, and the next message here brings it.
@@ -29,9 +29,8 @@ if (!waiting.length) process.exit(0);
 const index = read(path.join(DATA, "index.json"), { threads: [], sets: [], pages: [] });
 const mine = new Set([session, ...index.threads.filter((t) => (t.clis || []).includes(session)).map((t) => t.id)]);
 
-let posts = [];
-try { posts = fs.readdirSync(POSTS).map((f) => read(path.join(POSTS, f), null)).filter(Boolean); } catch {}
-const postOf = (c) => posts.find((p) => (p.shots || []).some((s) => s.hash === c.hash) || (p.page && c.hash === p.page.hash));
+const posts = readPosts();
+const postOf = (c) => postIn(c, posts);
 
 // pinned before the canvas knew who made it: the same lookup the canvas uses for the pin
 const madeBy = (c) => postOf(c)?.session
@@ -40,19 +39,7 @@ const madeBy = (c) => postOf(c)?.session
 const notes = waiting.filter((c) => mine.has(c.thread || madeBy(c)));
 if (!notes.length) process.exit(0);
 
-const lines = notes.map((c) => {
-  const p = postOf(c);
-  const shot = p?.shots?.find((s) => s.hash === c.hash);
-  const where = shot
-    ? `on the screen ${path.join(STORE, "img", `${shot.hash}.${shot.ext}`)} (${shot.w}x${shot.h}), pinned at x ${Math.round(c.x * shot.w)}, y ${Math.round(c.y * shot.h)}`
-    : `on the page ${path.join(STORE, `${c.hash}.html`)}, pinned at x ${Math.round(c.x)}, y ${Math.round(c.y)} on the page at 1280 wide`;
-  return `- Note ${c.id}: "${c.text}" ${where}${p ? `, from your post "${p.caption}"` : ""}.`;
-});
-const context = [
-  `The user left ${notes.length === 1 ? "a note" : `${notes.length} notes`} on your work in Rounds:`,
-  ...lines,
-  "Treat each as a request about that screen. Look at it (crop around the pinned point), act on it, then answer with rounds_reply and the note's id.",
-].join("\n");
+const context = noteMessage(notes, posts);
 
 fs.mkdirSync(SENT, { recursive: true });
 for (const c of notes) {
