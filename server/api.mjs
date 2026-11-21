@@ -12,7 +12,7 @@ import { buildIndex, keepImage, hasSips, which, DATA, STORE, IMG } from "./index
 import { pastPushes, importPushes } from "./history.mjs";
 import { applyMoves, fileTopics, filePostTopics, loadTopics } from "./topics.mjs";
 import { POSTS, projects, loadConfig } from "./config.mjs";
-import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus, trailOf } from "./scout.mjs";
+import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus, trailOf, underWay } from "./scout.mjs";
 import { CLAUDE } from "./config.mjs";
 
 // Whether the notes hook is in Claude's settings: without it, a note Scout can't carry has no
@@ -225,15 +225,18 @@ function toScout(c, idx) {
 }
 // Started by the first request a server takes, never by importing this module: a `vite build`
 // loads it through the Vite config, and must neither send notes nor be kept alive by the timer.
-let sweeping = false, sweeper = null;
+// Every half minute, or every few seconds while a note is under way, so its pin moves as the
+// session works on it.
+let sweeping = false, sweeper = null, ticks = 0;
 function startSweep() {
   if (sweeper) return;
   sweeper = setInterval(() => {
-    if (sweeping || !scoutOn()) return;
+    ticks++;
+    if (sweeping || !scoutOn() || (ticks % 8 !== 0 && !underWay())) return;
     sweeping = true;
     const idx = withLivePosts(readJSON(path.join(DATA, "index.json"), { pages: [], threads: [], sets: [] }));
     scoutSweep(comments(idx), idx).catch(() => {}).finally(() => (sweeping = false));
-  }, 30e3);
+  }, 4e3);
   sweeper.unref();
 }
 
@@ -363,7 +366,7 @@ export async function handle(req, res, next) {
           if (p === "/api/stamp") {
             const t = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
             // a note added or answered changes the list; one delivered adds a file to sent/
-            return json(res, { posted: t(path.join(DATA, "posted")), comments: Math.max(t(COMMENTS), t(SENT)) });
+            return json(res, { posted: t(path.join(DATA, "posted")), comments: Math.max(t(COMMENTS), t(SENT), t(path.join(DATA, "noted"))) });
           }
           // A file dropped on the canvas: an image joins its project as a screen, an HTML file
           // as a page.

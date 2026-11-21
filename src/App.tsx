@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { reducedTransparency } from "./look";
-import { clean, loadIndex, readSeen, markSeen, type Index, type Page } from "./data";
+import { clean, loadIndex, readSeen, markSeen, type Comment, type Index, type Page } from "./data";
 import { layout, type Cluster, type Group } from "./layout";
 import { useCamera, fit, type Cam } from "./camera";
 import { Stage, type Opening } from "./Stage";
@@ -153,6 +153,41 @@ export default function App() {
     pages: index.pages.filter((p) => p.thread === chat),
   }), [index, chat]);
   const world = useMemo(() => (shown ? layout(shown, asOf, !!chat) : null), [shown, asOf, chat]);
+
+  // A note to open (from the dock's notes, or a #note/<id> link): a page opens straight away;
+  // a screen opens from the group that holds it, going back to its day first when today's
+  // canvas no longer does.
+  const noteToOpen = useRef<{ id: string; looked: boolean } | null>(null);
+  const [noteTick, setNoteTick] = useState(0);
+  const openNote = (c: Comment) => { noteToOpen.current = { id: c.id, looked: false }; setNoteTick((n) => n + 1); };
+  useEffect(() => {
+    const want = noteToOpen.current;
+    if (!want || !index) return;
+    const c = index.comments.find((x) => x.id === want.id);
+    if (!c) { noteToOpen.current = null; return; }
+    const w = Math.min(640, innerWidth / 2), h = w * 0.62;
+    const from = { x: (innerWidth - w) / 2, y: (innerHeight - h) / 2, w, h };
+    if (!String(c.page).startsWith("shot-")) {
+      const page = index.pages.find((p) => p.id === c.page);
+      if (page) { setShots(null); setOpen({ page, from, hash: c.hash, note: c.id }); }
+      noteToOpen.current = null;
+      return;
+    }
+    if (!world) return;
+    for (const cl of world.clusters) for (const g of cl.groups) {
+      const it = g.all.find((x) => x.kind === "shot" && x.shot.hash === c.hash);
+      if (!it) continue;
+      noteToOpen.current = null;
+      setOpen(null);
+      setShotKey(it.key);
+      setShots({ group: g, i: Math.max(0, g.items.findIndex((x) => x.key === it.key)), key: it.key, from, note: c.id });
+      return;
+    }
+    // not on this day's canvas: go back to the day of the screen's set, then look again
+    const set = index.sets.find((s) => s.shots.some((x) => x.hash === c.hash));
+    if (set && !want.looked) { want.looked = true; changeDay(endOfDay(new Date(set.at))); }
+    else noteToOpen.current = null;
+  }, [noteTick, index, world]);
   useLayoutEffect(() => {
     if (!SPLITS || !world) return;
     let area = 0;
@@ -180,14 +215,8 @@ export default function App() {
       setIndex(i);
       // a link to one post (#id, as the MCP server gives it) opens the canvas on it
       const id = decodeURIComponent(location.hash.slice(1));
-      // a link to one note (#note/<id>) opens its page with the note open to read
-      const noted = id.startsWith("note/") ? i.comments.find((c) => c.id === id.slice(5)) : null;
-      const notedPage = noted && i.pages.find((p) => p.id === noted.page);
-      if (noted && notedPage) {
-        const w = Math.min(640, innerWidth / 2), h = w * 0.62;
-        setOpen({ page: notedPage, from: { x: (innerWidth - w) / 2, y: (innerHeight - h) / 2, w, h }, hash: noted.hash, note: noted.id });
-        return;
-      }
+      // a link to one note (#note/<id>) opens its screen or page with the note open to read
+      if (id.startsWith("note/")) { noteToOpen.current = { id: id.slice(5), looked: false }; setNoteTick((n) => n + 1); return; }
       if (id) { finding.current = { id, at: Date.now(), back: false }; setFindTick((n) => n + 1); }
     });
     const t = setInterval(() => loadIndex().then((i) => { setIndex(i); setUnreachable(false); }, () => {}), 60e3);
@@ -867,6 +896,8 @@ export default function App() {
           onSearch={() => setSearching(true)}
           session={chat ? clean(index.threads.find((t) => t.id === chat)?.title || "") || "Session" : null}
           onAll={() => showSession(null)}
+          index={index}
+          onNote={openNote}
         />
       )}
       {index && (

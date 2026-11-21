@@ -360,7 +360,15 @@ function Compare({ before, after, changes, pageH, scale, wipe, setWipe, animate 
 }
 
 /** Where a note goes, in a line: to its session now, with the next message there, or nowhere. */
-function whereTo(note: Comment) {
+export function whereTo(note: Comment) {
+  const last = note.trail?.at(-1);
+  if (!note.reply && last?.what === "working") {
+    const took = note.trail!.filter((t) => t.what === "handed-off" || t.what === "new-session").at(-1);
+    return took ? `A session in ${took.project?.split("/").filter(Boolean).pop() || "its repo"} is working on it` : "Its session is working on it";
+  }
+  return whereToNow(note);
+}
+function whereToNow(note: Comment) {
   const to = note.threadTitle ? `“${note.threadTitle}”` : "its session";
   const handed = note.trail?.filter((t) => t.what === "handed-off").at(-1);
   const where = (p?: string) => (p ? p.split("/").filter(Boolean).pop() : "its repo");
@@ -382,7 +390,7 @@ function whereTo(note: Comment) {
 }
 
 /** One step of a note's trail, in a few words. */
-function trailLine(t: TrailStep) {
+export function trailLine(t: TrailStep) {
   const base = (p?: string) => (p ? p.split("/").filter(Boolean).pop() : "its repo");
   switch (t.what) {
     case "unreachable": return "Scout couldn't reach its session";
@@ -390,6 +398,7 @@ function trailLine(t: TrailStep) {
     case "sent": return "sent to its session through Scout";
     case "new-session": return `a new session in ${base(t.project)} took it`;
     case "handed-off": return `handed on to a session in ${base(t.project)}`;
+    case "working": return "the session started on it";
     case "answered": return `answered${t.screens ? `, with ${t.screens} screen${t.screens === 1 ? "" : "s"}` : ""}`;
     case "unanswered": return `ended without an answer${t.why ? ` (${t.why})` : ""}`;
   }

@@ -16,7 +16,7 @@ export type Comment = {
   trail?: TrailStep[];
 };
 export type TrailStep = {
-  what: "unreachable" | "failed" | "sent" | "new-session" | "handed-off" | "answered" | "unanswered";
+  what: "unreachable" | "failed" | "sent" | "new-session" | "working" | "handed-off" | "answered" | "unanswered";
   at: number; why?: string; to?: string; project?: string; task?: string; screens?: number; said?: string;
 };
 export type Shot = { hash: string; ext: string; w: number; h: number; name: string };

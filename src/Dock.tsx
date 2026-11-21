@@ -3,6 +3,8 @@
 // Panning, zooming and pinning a note need no tool: the canvas and the viewer carry them.
 import { useRef, useState } from "react";
 import { Glyph } from "./glyphs";
+import { NotesKey } from "./Notes";
+import type { Comment, Index } from "./data";
 
 export type Tool = "move" | "hand" | "comment";
 
@@ -30,10 +32,11 @@ function Key({ label, on, accent, onClick, children }: { label: string; on?: boo
 // edge to edge at 44 so the pressed circle stays concentric with the dock (6 in from its ends).
 const Rule = () => <span className="mx-2 h-5 w-px shrink-0" style={{ background: "rgba(21,24,29,0.1)" }} />;
 
-export function Dock({ hidden, timeOn, away, onTime, onSearch, session, onAll }: {
+export function Dock({ hidden, timeOn, away, onTime, onSearch, session, onAll, index, onNote }: {
   hidden: boolean; timeOn: boolean; away: string | null;
   onTime: (from: DOMRect) => void; onSearch: () => void;
   session: string | null; onAll: () => void;
+  index: Index; onNote: (c: Comment) => void;
 }) {
   const timeBtn = useRef<HTMLButtonElement>(null);
   const dock = useRef<HTMLDivElement>(null);
@@ -86,6 +89,7 @@ export function Dock({ hidden, timeOn, away, onTime, onSearch, session, onAll }:
       </button>
       <Rule />
       <Key label="Search (/)" onClick={onSearch}><Glyph name="search" /></Key>
+      <NotesKey index={index} onOpen={onNote} />
       {session && (
         <>
           <Rule />

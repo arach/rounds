@@ -21,8 +21,8 @@ import { keepImage, which } from "./indexer.mjs";
 import { SENT, delivered, noteMessage } from "./notes.mjs";
 
 const log = (s) => console.log(`[rounds] scout: ${s}`);
-// the stamp the canvas asks after every few seconds: a note's pin changes with its delivery
-const changed = () => { try { fs.writeFileSync(path.join(DATA, "posted"), String(Date.now())); } catch {} };
+// the stamp the canvas asks after every few seconds for notes: a pin changes with each step
+const changed = () => { try { fs.writeFileSync(path.join(DATA, "noted"), String(Date.now())); } catch {} };
 
 let bin; // undefined until looked for, null when Scout isn't installed
 const scoutBin = () => (bin === undefined ? (bin = process.env.ROUNDS_SCOUT_BIN || which("scout")) : bin);
@@ -70,7 +70,7 @@ const carrying = new Set();
 const tried = new Map();
 // Each note's trail, kept in ~/.rounds/trail/<id>.json so its pin tells the same story after a
 // refresh or a restart: every step Scout took with it, oldest first. A step is
-//   { what: "unreachable" | "failed" | "sent" | "new-session" | "handed-off" | "answered" | "unanswered", at, ... }
+//   { what: "unreachable" | "failed" | "sent" | "new-session" | "working" | "handed-off" | "answered" | "unanswered", at, ... }
 // and a step repeated (the sweep finding a session still closed) is written once.
 const TRAIL = path.join(DATA, "trail");
 export function trailOf(id) {
@@ -224,12 +224,16 @@ async function follow(list) {
     if (!trailOf(c.id).some((x) => x.what === "sent" || x.what === "new-session")) {
       step(c.id, s.delivery === "scout-new" ? { what: "new-session", project: s.project, task: s.task, at: s.at } : { what: "sent", to: s.address, task: s.task, at: s.at });
     }
-    if (Date.now() - (looked.get(c.id) || 0) < 60e3) continue;
+    // a note sent or moved on in the last quarter hour is looked at every few seconds
+    const trail = trailOf(c.id);
+    const fresh = Date.now() - Math.max(s.at || 0, trail.at(-1)?.at || 0) < FRESH;
+    if (Date.now() - (looked.get(c.id) || 0) < (fresh ? 3e3 : 60e3)) continue;
     looked.set(c.id, Date.now());
     // a session that handed the note on is followed to the one that took it
     const task = s.following || s.task;
     const work = await workOf(task);
     if (!work) continue;
+    if (WORKING.includes(work.state)) step(c.id, { what: "working", task });
     if (work.state === "completed" && work.answer) {
       const next = await handedTo(String(work.answer), work);
       if (next) {
@@ -242,6 +246,25 @@ async function follow(list) {
       answer(c.id, String(work.answer), work.updatedAt);
     } else if (["failed", "cancelled", "canceled", "expired"].includes(work.state)) step(c.id, { what: "unanswered", why: work.reason || work.state, task });
   }
+}
+
+const FRESH = 15 * 60e3;
+const WORKING = ["running", "working", "active", "in_progress", "claimed"];
+/** Whether any note is under way: sent through Scout lately and not yet answered or given up. */
+export function underWay() {
+  let names;
+  try { names = fs.readdirSync(SENT); } catch { return false; }
+  const now = Date.now();
+  for (const f of names) {
+    if (!f.endsWith(".json")) continue;
+    try {
+      if (now - fs.statSync(path.join(SENT, f)).mtimeMs > 3 * 864e5) continue;
+      const last = trailOf(f.slice(0, -5)).at(-1);
+      if (last?.what === "answered" || last?.what === "unanswered") continue;
+      if (now - Math.max(fs.statSync(path.join(SENT, f)).mtimeMs, last?.at || 0) < FRESH) return true;
+    } catch {}
+  }
+  return false;
 }
 
 async function workOf(handle) {

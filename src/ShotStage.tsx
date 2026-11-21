@@ -9,7 +9,8 @@ import { Glyph } from "./glyphs";
 import { reducedMotion } from "./look";
 import type { Rect } from "./Stage";
 
-export type ShotOpening = { group: Group; i: number; from: Rect; place?: boolean };
+/** `key`: the screen to open on, when it's past the group's first few; `note`: a note to open to read */
+export type ShotOpening = { group: Group; i: number; from: Rect; place?: boolean; key?: string; note?: string };
 type ShotItem = Extract<Group["all"][number], { kind: "shot" }>;
 
 const shotKey = (s: Shot) => `shot-${s.hash}`;
@@ -48,7 +49,7 @@ export function ShotStage({ opening, comments, gone, onComment, onStep, onClosin
 }) {
   const { group } = opening;
   const shots = group.all.filter((it): it is ShotItem => it.kind === "shot");
-  const [i, setI] = useState(() => Math.max(0, shots.findIndex((s) => s.key === group.items[opening.i]?.key)));
+  const [i, setI] = useState(() => Math.max(0, shots.findIndex((s) => s.key === (opening.key ?? group.items[opening.i]?.key))));
   // The screen as the canvas already holds it, loaded and decoded: it lies under the larger image,
   // so the card never flies up blank (the canvas's copy hides the moment this one shows).
   const unders = useRef(new Map<string, string>());
@@ -245,7 +246,7 @@ export function ShotStage({ opening, comments, gone, onComment, onStep, onClosin
         )}
         {placing && <div className="absolute inset-0" style={{ cursor: "crosshair" }} onClick={place} />}
         <div className="pointer-events-none absolute inset-0 [&>*]:pointer-events-auto" style={{ opacity: landed && !closing && !leaving ? 1 : 0, transition: "opacity 200ms var(--ease-out)" }}>
-          {notes.map((n, k) => <Pin key={n.id} n={k + 1} x={n.x * rect.w} y={n.y * rect.h} note={n} faded={false} />)}
+          {notes.map((n, k) => <Pin key={n.id} n={k + 1} x={n.x * rect.w} y={n.y * rect.h} note={n} faded={false} startOpen={opening.note === n.id} />)}
           {draft && <Composer x={draft.x * rect.w} y={draft.y * rect.h} n={notes.length + 1} onSend={send} onCancel={() => setDraft(null)} />}
         </div>
       </div>
