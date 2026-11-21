@@ -180,6 +180,14 @@ export default function App() {
       setIndex(i);
       // a link to one post (#id, as the MCP server gives it) opens the canvas on it
       const id = decodeURIComponent(location.hash.slice(1));
+      // a link to one note (#note/<id>) opens its page with the note open to read
+      const noted = id.startsWith("note/") ? i.comments.find((c) => c.id === id.slice(5)) : null;
+      const notedPage = noted && i.pages.find((p) => p.id === noted.page);
+      if (noted && notedPage) {
+        const w = Math.min(640, innerWidth / 2), h = w * 0.62;
+        setOpen({ page: notedPage, from: { x: (innerWidth - w) / 2, y: (innerHeight - h) / 2, w, h }, hash: noted.hash, note: noted.id });
+        return;
+      }
       if (id) { finding.current = { id, at: Date.now(), back: false }; setFindTick((n) => n + 1); }
     });
     const t = setInterval(() => loadIndex().then((i) => { setIndex(i); setUnreachable(false); }, () => {}), 60e3);

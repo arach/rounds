@@ -7,7 +7,8 @@ import { Glyph } from "./glyphs";
 import { reducedMotion } from "./look";
 
 export type Rect = { x: number; y: number; w: number; h: number };
-export type Opening = { page: Page; from: Rect; hash?: string; place?: boolean };
+/** `note`: a note to open to read once the page is up (a #note/<id> link) */
+export type Opening = { page: Page; from: Rect; hash?: string; place?: boolean; note?: string };
 
 const PAGE_W = 1280; // pages render at desktop width and scale to the stage
 
@@ -153,6 +154,7 @@ export function Stage({ opening, index, onComment, onClosing, onClose }: {
             height={rect.h}
             placing={placing}
             notes={notes}
+            openNote={opening.note}
             draft={draft}
             current={v.hash}
             onPlace={(x, y) => setDraft({ x, y })}
@@ -181,9 +183,9 @@ export function Stage({ opening, index, onComment, onClosing, onClose }: {
 }
 
 /** The page itself (live and scrollable), or its before and after with what changed marked. */
-function Surface({ hash, before, scale, height, placing, notes, draft, current, onPlace, onSend, onCancel, hidden, onReady }: {
+function Surface({ hash, before, scale, height, placing, notes, openNote, draft, current, onPlace, onSend, onCancel, hidden, onReady }: {
   hash: string; before: string | null; scale: number; height: number; placing: boolean;
-  notes: Comment[]; draft: { x: number; y: number } | null; current: string;
+  notes: Comment[]; openNote?: string; draft: { x: number; y: number } | null; current: string;
   onPlace: (x: number, y: number) => void; onSend: (t: string) => void; onCancel: () => void; hidden: boolean;
   onReady: (r: boolean) => void;
 }) {
@@ -263,7 +265,7 @@ function Surface({ hash, before, scale, height, placing, notes, draft, current, 
   const pins = (
     <>
       {notes.map((n, i) => (
-        <Pin key={n.id} n={i + 1} x={n.x * scale} y={n.y * scale - offset} note={n} faded={n.hash !== current} />
+        <Pin key={n.id} n={i + 1} x={n.x * scale} y={n.y * scale - offset} note={n} faded={n.hash !== current} startOpen={openNote === n.id} />
       ))}
       {draft && <Composer x={draft.x * scale} y={draft.y * scale - offset} n={notes.length + 1} onSend={onSend} onCancel={onCancel} />}
     </>
@@ -388,9 +390,9 @@ function trailLine(t: TrailStep) {
   }
 }
 
-export function Pin({ n, x, y, note, faded }: { n: number; x: number; y: number; note: Comment; faded: boolean }) {
+export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x: number; y: number; note: Comment; faded: boolean; startOpen?: boolean }) {
   const [hover, setHover] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const kept = note.state === "kept" && !note.reply;
   const done = note.state === "sent" || !!note.reply;
   return (
