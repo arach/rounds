@@ -404,13 +404,50 @@ export function trailLine(t: TrailStep) {
   }
 }
 
+/**
+ * While an agent has the note (sent, not yet answered), what it's doing, in a word or two with
+ * where: "scout-apps · working". Null when no agent has it: waiting, kept here, or answered.
+ */
+export function agentOf(note: Comment): string | null {
+  if (note.reply || note.state === "kept") return null;
+  // on its way: Scout or the relay is carrying it right now
+  const sending = note.state !== "sent" && (note.route === "scout" || note.route === "relay");
+  if (note.state !== "sent" && !sending) return null;
+  // only Scout deliveries are followed to an answer, and only for three days
+  if (!sending && (!note.delivery?.startsWith("scout") || Date.now() - (note.trail?.at(-1)?.at ?? note.at) > 3 * 864e5)) return null;
+  const last = note.trail?.at(-1)?.what;
+  if (last === "unreachable" || last === "failed" || last === "unanswered") return null;
+  const took = note.trail?.filter((t) => t.what === "handed-off" || t.what === "new-session").at(-1);
+  const where = took?.project?.split("/").filter(Boolean).pop() || note.sentTo || null;
+  const doing = sending ? "sending" : last === "working" ? "working" : last === "handed-off" ? "handed on" : "on it";
+  return where ? `${where} · ${doing}` : doing[0].toUpperCase() + doing.slice(1);
+}
+
 export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x: number; y: number; note: Comment; faded: boolean; startOpen?: boolean }) {
   const [hover, setHover] = useState(false);
   const [open, setOpen] = useState(startOpen);
   const kept = note.state === "kept" && !note.reply;
-  const done = note.state === "sent" || !!note.reply;
+  const agent = agentOf(note);
+  const done = !!note.reply || (note.state === "sent" && !agent);
+  const still = reducedMotion();
   return (
     <div className="absolute" style={{ left: x, top: y, opacity: faded ? 0.5 : 1 }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      {agent && (
+        // an agent has the note: a halo breathes behind the pin and an arc runs round it
+        <>
+          <span aria-hidden className="pointer-events-none absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: "var(--honey)", animation: still ? undefined : "wb-halo 1.8s ease-out infinite" }} />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{
+              background: "conic-gradient(from 0deg, transparent 0deg, var(--honey) 300deg, transparent 360deg)",
+              WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px))",
+              mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px))",
+              animation: still ? undefined : "wb-orbit 1.1s linear infinite",
+            }}
+          />
+        </>
+      )}
       <button
         type="button"
         className="type-mono absolute grid h-7 min-w-7 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full px-1.5 text-[12px] font-medium text-white"
@@ -422,6 +459,19 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
       >
         {done ? <Glyph name="done" size={13} /> : n}
       </button>
+      {agent && !hover && !open && (
+        <span
+          className="glass dock pointer-events-none absolute left-[26px] top-0 flex h-7 -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-full pl-2.5 pr-3 text-[12px] font-[540] text-[var(--ink)]"
+          style={{ animation: "wb-pop 260ms var(--ease-out) both" }}
+        >
+          <span className="flex items-center gap-[3px]" aria-hidden>
+            {[0, 1, 2].map((d) => (
+              <span key={d} className="h-[5px] w-[5px] rounded-full" style={{ background: "var(--honey)", animation: still ? undefined : `wb-dot 1.2s ${d * 0.16}s ease-in-out infinite` }} />
+            ))}
+          </span>
+          {agent}
+        </span>
+      )}
       {hover && !open && (
         <div className="glass dock absolute left-5 top-[-14px] w-80 rounded-[14px] px-4 py-3 text-[14px] leading-snug" style={{ animation: "wb-pop 220ms var(--ease-out) both" }}>
           {note.text}
@@ -433,7 +483,7 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
         </div>
       )}
       {open && <NotePanel n={n} note={note} onClose={() => setOpen(false)} />}
-      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } }`}</style>
+      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } } @keyframes wb-halo { from { transform: translate(-50%, -50%) scale(1); opacity: 0.45 } to { transform: translate(-50%, -50%) scale(2.3); opacity: 0 } } @keyframes wb-orbit { from { transform: translate(-50%, -50%) rotate(0deg) } to { transform: translate(-50%, -50%) rotate(360deg) } } @keyframes wb-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35 } 40% { transform: translateY(-3px); opacity: 1 } }`}</style>
     </div>
   );
 }
