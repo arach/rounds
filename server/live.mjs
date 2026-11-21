@@ -34,7 +34,8 @@ const slug = (dir) => String(dir).replace(/[^a-zA-Z0-9]/g, "-");
 function transcriptOf(id, since, cwd, handed) {
   const key = handed ? `${id}>${handed}` : id;
   if (found.has(key)) return found.get(key);
-  if (Date.now() - (missed.get(key) || 0) < 15e3) return null;
+  // a session just handed the note takes a few seconds to write its first line: look often then
+  if (Date.now() - (missed.get(key) || 0) < (Date.now() - since < 120e3 ? 2e3 : 15e3)) return null;
   const mark = handed ? id : `- Note ${id}: `;
   const root = path.join(CLAUDE, "projects");
   let dirs = [];
