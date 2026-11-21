@@ -365,7 +365,7 @@ export function whereTo(note: Comment) {
   const last = note.trail?.at(-1);
   if (!note.reply && last?.what === "working") {
     const took = note.trail!.filter((t) => t.what === "handed-off" || t.what === "new-session").at(-1);
-    return took ? `A session in ${took.project?.split("/").filter(Boolean).pop() || "its repo"} is working on it` : "Its session is working on it";
+    return took ? `A session in ${took.project?.split("/").filter(Boolean).pop() || "its repo"} has it` : "Its session has it";
   }
   return whereToNow(note);
 }
@@ -511,9 +511,10 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
       {agent && !hover && !open && (
         // who has it, steady: dots while it's visibly at work, one quiet word when it isn't.
         // What it's doing goes in the panel, where a line can change without moving the canvas.
+        // Solid, not glass: glass's blurred rim leaves a band through the words at this height.
         <span
-          className="glass dock pointer-events-none absolute left-[24px] top-0 flex h-6 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full pl-2 pr-2.5 text-[11.5px] font-[540]"
-          style={{ animation: "wb-pop 260ms var(--ease-out) both", color: busy ? "var(--ink)" : "var(--muted)" }}
+          className="pointer-events-none absolute left-[24px] top-0 flex h-6 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border pl-2 pr-2.5 text-[11.5px] font-[540]"
+          style={{ animation: "wb-pop 260ms var(--ease-out) both", color: busy ? "var(--ink)" : "var(--muted)", background: "color-mix(in srgb, var(--wall) 96%, transparent)", borderColor: "rgba(21,24,29,0.08)", boxShadow: "0 2px 8px -3px rgba(21,24,29,0.25)" }}
           title={agentLine(agent)}
         >
           {busy && <Dots size={4} />}
