@@ -469,7 +469,7 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
               <span key={d} className="h-[5px] w-[5px] rounded-full" style={{ background: "var(--honey)", animation: still ? undefined : `wb-dot 1.2s ${d * 0.16}s ease-in-out infinite` }} />
             ))}
           </span>
-          {agent}
+          <span>{agent}</span>
         </span>
       )}
       {hover && !open && (
@@ -483,7 +483,7 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
         </div>
       )}
       {open && <NotePanel n={n} note={note} onClose={() => setOpen(false)} />}
-      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } } @keyframes wb-halo { from { transform: translate(-50%, -50%) scale(1); opacity: 0.45 } to { transform: translate(-50%, -50%) scale(2.3); opacity: 0 } } @keyframes wb-orbit { from { transform: translate(-50%, -50%) rotate(0deg) } to { transform: translate(-50%, -50%) rotate(360deg) } } @keyframes wb-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35 } 40% { transform: translateY(-3px); opacity: 1 } }`}</style>
+      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } } @keyframes wb-halo { from { transform: scale(1); opacity: 0.45 } to { transform: scale(2.3); opacity: 0 } } @keyframes wb-orbit { to { transform: rotate(360deg) } } @keyframes wb-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35 } 40% { transform: translateY(-3px); opacity: 1 } }`}</style>
     </div>
   );
 }
