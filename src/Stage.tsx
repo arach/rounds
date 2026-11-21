@@ -5,6 +5,7 @@ import { diffBoxes, type Box } from "./diff";
 import { blockChanges, type Changes } from "./blocks";
 import { Glyph } from "./glyphs";
 import { reducedMotion } from "./look";
+import { activity, span, useLive, type Activity } from "./live";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 /** `note`: a note to open to read once the page is up (a #note/<id> link) */
@@ -405,10 +406,11 @@ export function trailLine(t: TrailStep) {
 }
 
 /**
- * While an agent has the note (sent, not yet answered), what it's doing, in a word or two with
- * where: "scout-apps · working". Null when no agent has it: waiting, kept here, or answered.
+ * Who has the note while it's out (sent through Scout, not yet answered): the repo, and whether
+ * it's still on its way. Null when no agent has it: waiting, kept here, answered, given up, or
+ * sent some way Rounds can't follow.
  */
-export function agentOf(note: Comment): string | null {
+export function heldBy(note: Comment): { where: string | null; sending: boolean; since: number } | null {
   if (note.reply || note.state === "kept") return null;
   // on its way: Scout or the relay is carrying it right now
   const sending = note.state !== "sent" && (note.route === "scout" || note.route === "relay");
@@ -419,35 +421,82 @@ export function agentOf(note: Comment): string | null {
   if (last === "unreachable" || last === "failed" || last === "unanswered") return null;
   const took = note.trail?.filter((t) => t.what === "handed-off" || t.what === "new-session").at(-1);
   const where = took?.project?.split("/").filter(Boolean).pop() || note.sentTo || null;
-  const doing = sending ? "sending" : last === "working" ? "working" : last === "handed-off" ? "handed on" : "on it";
-  return where ? `${where} · ${doing}` : doing[0].toUpperCase() + doing.slice(1);
+  // the clock runs from when the agent that has it now took it
+  const since = took?.at ?? note.trail?.find((t) => t.what === "sent")?.at ?? note.at;
+  return { where, sending, since };
+}
+
+export type AgentState = { where: string | null; since: number; act: Activity | { kind: "sending" } };
+
+/**
+ * The agent on a note, and what it's visibly doing. "active" only when its transcript moved in
+ * the last minute and a half, or a tool call it made is still out: a task Scout calls running
+ * proves nothing by itself.
+ */
+export function useAgent(note: Comment): AgentState | null {
+  const h = heldBy(note);
+  const live = useLive(note.id, !!h && !h.sending);
+  if (!h) return null;
+  return { where: h.where, since: h.since, act: h.sending ? { kind: "sending" } : activity(live) };
+}
+
+/** The agent's state in a few words, for the pin's tag and the notes list. */
+export function agentLine(a: AgentState): string {
+  const act = a.act;
+  if (act.kind === "sending") return "Sending";
+  if (act.kind === "active") return act.line;
+  if (act.kind === "quiet") return `No sign of work for ${span(act.for)}`;
+  return Date.now() - a.since < 120e3 ? "Waiting for it to start" : "Can't see its work";
+}
+/** One word for an agent that shows no work, steady enough for the canvas. */
+export function agentWord(a: AgentState): string {
+  if (a.act.kind === "quiet") return "quiet";
+  if (a.act.kind === "unseen") return Date.now() - a.since < 120e3 ? "starting" : "no sign of work";
+  return "";
+}
+export const isBusy = (a: AgentState | null) => !!a && (a.act.kind === "active" || a.act.kind === "sending");
+
+/** Three dots that take turns rising: an agent is at it. */
+export function Dots({ size = 5 }: { size?: number }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-[3px]" aria-hidden>
+      {[0, 1, 2].map((d) => (
+        <span key={d} className="rounded-full" style={{ width: size, height: size, background: "var(--honey)", animation: `wb-dot 1.2s ${d * 0.16}s ease-in-out infinite` }} />
+      ))}
+    </span>
+  );
+}
+
+/** A blinking caret: the agent is writing here. */
+export const Caret = () => (
+  <span aria-hidden className="ml-[2px] inline-block h-[1.05em] w-[2px] shrink-0 translate-y-[2px] rounded-[1px] align-baseline" style={{ background: "var(--honey)", animation: "wb-caret 1.05s steps(1) infinite" }} />
+);
+
+/** Text typed out when it changes, with the caret after it, like a cursor at work. */
+export function Typed({ text }: { text: string }) {
+  const [n, setN] = useState(0);
+  const was = useRef("");
+  useEffect(() => {
+    if (was.current === text) return;
+    was.current = text;
+    if (reducedMotion()) { setN(text.length); return; }
+    let i = 0;
+    setN(0);
+    const t = setInterval(() => { i += 2; setN(Math.min(i, text.length)); if (i >= text.length) clearInterval(t); }, 18);
+    return () => clearInterval(t);
+  }, [text]);
+  return <>{text.slice(0, n)}<Caret /></>;
 }
 
 export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x: number; y: number; note: Comment; faded: boolean; startOpen?: boolean }) {
   const [hover, setHover] = useState(false);
   const [open, setOpen] = useState(startOpen);
   const kept = note.state === "kept" && !note.reply;
-  const agent = agentOf(note);
+  const agent = useAgent(note);
+  const busy = isBusy(agent);
   const done = !!note.reply || (note.state === "sent" && !agent);
-  const still = reducedMotion();
   return (
     <div className="absolute" style={{ left: x, top: y, opacity: faded ? 0.5 : 1 }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-      {agent && (
-        // an agent has the note: a halo breathes behind the pin and an arc runs round it
-        <>
-          <span aria-hidden className="pointer-events-none absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: "var(--honey)", animation: still ? undefined : "wb-halo 1.8s ease-out infinite" }} />
-          <span
-            aria-hidden
-            className="pointer-events-none absolute h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{
-              background: "conic-gradient(from 0deg, transparent 0deg, var(--honey) 300deg, transparent 360deg)",
-              WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px))",
-              mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px))",
-              animation: still ? undefined : "wb-orbit 1.1s linear infinite",
-            }}
-          />
-        </>
-      )}
       <button
         type="button"
         className="type-mono absolute grid h-7 min-w-7 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full px-1.5 text-[12px] font-medium text-white"
@@ -460,22 +509,23 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
         {done ? <Glyph name="done" size={13} /> : n}
       </button>
       {agent && !hover && !open && (
+        // who has it, steady: dots while it's visibly at work, one quiet word when it isn't.
+        // What it's doing goes in the panel, where a line can change without moving the canvas.
         <span
-          className="glass dock pointer-events-none absolute left-[26px] top-0 flex h-7 -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-full pl-2.5 pr-3 text-[12px] font-[540] text-[var(--ink)]"
-          style={{ animation: "wb-pop 260ms var(--ease-out) both" }}
+          className="glass dock pointer-events-none absolute left-[24px] top-0 flex h-6 -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full pl-2 pr-2.5 text-[11.5px] font-[540]"
+          style={{ animation: "wb-pop 260ms var(--ease-out) both", color: busy ? "var(--ink)" : "var(--muted)" }}
+          title={agentLine(agent)}
         >
-          <span className="flex items-center gap-[3px]" aria-hidden>
-            {[0, 1, 2].map((d) => (
-              <span key={d} className="h-[5px] w-[5px] rounded-full" style={{ background: "var(--honey)", animation: still ? undefined : `wb-dot 1.2s ${d * 0.16}s ease-in-out infinite` }} />
-            ))}
-          </span>
-          <span>{agent}</span>
+          {busy && <Dots size={4} />}
+          <span>{agent.where ?? "Its session"}</span>
+          {!busy && <span>· {agentWord(agent)}</span>}
         </span>
       )}
       {hover && !open && (
         <div className="glass dock absolute left-5 top-[-14px] w-80 rounded-[14px] px-4 py-3 text-[14px] leading-snug" style={{ animation: "wb-pop 220ms var(--ease-out) both" }}>
           {note.text}
           <div className="mt-2 text-[12.5px] text-[var(--muted)]">{whereTo(note)}</div>
+          {agent && <div className="type-mono mt-1.5 truncate text-[12px] text-[var(--ink)]">› {agentLine(agent)}</div>}
           {note.reply && <div className="mt-2.5 line-clamp-4 border-t border-[var(--faint)] pt-2.5">{note.reply.text}</div>}
           <div className="type-mono mt-2 text-[11px] text-[var(--quiet)]">
             {when(note.reply?.at ?? note.at)}{(note.reply || note.trail?.length) ? " · click the pin to read it all" : ""}
@@ -483,7 +533,7 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
         </div>
       )}
       {open && <NotePanel n={n} note={note} onClose={() => setOpen(false)} />}
-      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } } @keyframes wb-halo { from { transform: scale(1); opacity: 0.45 } to { transform: scale(2.3); opacity: 0 } } @keyframes wb-orbit { to { transform: rotate(360deg) } } @keyframes wb-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35 } 40% { transform: translateY(-3px); opacity: 1 } }`}</style>
+      <style>{`@keyframes wb-pin { from { transform: scale(0.4); opacity: 0 } } @keyframes wb-pop { from { opacity: 0; transform: translateY(4px) } } @keyframes wb-panel { from { opacity: 0; transform: translateX(12px) } }`}</style>
     </div>
   );
 }
@@ -494,6 +544,9 @@ export function Pin({ n, x, y, note, faded, startOpen = false }: { n: number; x:
  * edges never shrink or clip it, on a solid sheet so a dark screen behind never muddies it.
  */
 function NotePanel({ n, note, onClose }: { n: number; note: Comment; onClose: () => void }) {
+  const agent = useAgent(note);
+  const busy = isBusy(agent);
+  const handed = note.trail?.filter((t) => t.what === "handed-off").at(-1);
   useEffect(() => {
     // Esc closes this first, before it backs out of the stage
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); onClose(); } };
@@ -534,10 +587,28 @@ function NotePanel({ n, note, onClose }: { n: number; note: Comment; onClose: ()
               </div>
             )}
           </>
-        ) : note.trail?.some((t) => t.what === "handed-off") ? (
+        ) : agent ? (
+          <div aria-live="polite">
+            <AgentCard agent={agent} />
+            {handed?.said && (
+              <>
+                <div className="mt-4 text-[12.5px] font-medium text-[var(--muted)]">Where it was handed on:</div>
+                <div className="mt-1.5 whitespace-pre-line text-[14px] leading-[1.6] text-[var(--muted)]">{handed.said}</div>
+              </>
+            )}
+            {busy && (
+              // the answer's place, held while the agent works
+              <div className="mt-5 space-y-2.5" aria-hidden>
+                {[92, 78, 85, 54].map((w, i) => (
+                  <div key={i} className="h-3 rounded-full" style={{ width: `${w}%`, background: "linear-gradient(90deg, var(--faint) 0%, var(--honey-wash) 50%, var(--faint) 100%)", backgroundSize: "200% 100%", animation: `wb-shimmer 1.6s ${i * 0.12}s ease-in-out infinite` }} />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : handed ? (
           <>
             <div className="text-[13px] font-medium text-[var(--muted)]">Still in progress. Where it was handed on:</div>
-            <div className="mt-2 whitespace-pre-line text-[14px] leading-[1.6] text-[var(--muted)]">{note.trail.filter((t) => t.what === "handed-off").at(-1)?.said}</div>
+            <div className="mt-2 whitespace-pre-line text-[14px] leading-[1.6] text-[var(--muted)]">{handed.said}</div>
           </>
         ) : (
           <div className="text-[14px] text-[var(--muted)]">No answer yet.</div>
@@ -545,12 +616,53 @@ function NotePanel({ n, note, onClose }: { n: number; note: Comment; onClose: ()
         {!!note.trail?.length && (
           <ol className="type-mono mt-5 space-y-1 border-t border-[var(--faint)] pt-3 text-[12px] text-[var(--muted)]">
             <li>{when(note.at)} pinned</li>
-            {note.trail.map((t, i) => <li key={i}>{when(t.at)} {trailLine(t)}</li>)}
+            {note.trail.map((t, i) => <li key={i} style={busy && i === note.trail!.length - 1 ? { color: "var(--ink)" } : undefined}>{when(t.at)} {trailLine(t)}</li>)}
+            {busy && (
+              <li className="flex items-center gap-2 text-[var(--quiet)]">
+                <span className="invisible">{when(Date.now())}</span>
+                <Dots size={4} /> its answer comes here
+              </li>
+            )}
           </ol>
         )}
       </div>
     </aside>,
     document.body,
+  );
+}
+
+/** The agent on a note, in the panel: what it's doing now with a cursor, or that it's quiet. */
+function AgentCard({ agent }: { agent: AgentState }) {
+  const act = agent.act;
+  const busy = isBusy(agent);
+  const who = agent.where ? `A session in ${agent.where}` : "Its session";
+  const clock = span(Date.now() - agent.since);
+  return (
+    <div className="rounded-[12px] px-3.5 py-3" style={{ background: busy ? "var(--honey-wash)" : "rgba(21,24,29,0.04)" }}>
+      <div className="flex items-center gap-2.5 text-[13px]">
+        {busy && <Dots size={6} />}
+        <span className="min-w-0 flex-1 font-[540]">
+          {act.kind === "sending" ? "On its way through Scout" : act.kind === "active" ? `${who} is working on it` : act.kind === "quiet" ? `${who} took it, but has gone quiet` : `Handed to ${who.toLowerCase()}`}
+        </span>
+        <span className="type-mono shrink-0 text-[12px] text-[var(--muted)] [font-variant-numeric:tabular-nums]" title="Since it was sent">{clock}</span>
+      </div>
+      {act.kind === "active" && (
+        <div className="type-mono mt-2 flex items-center text-[12.5px] leading-snug text-[var(--ink)]">
+          <span className="mr-2 shrink-0 text-[var(--quiet)]">›</span>
+          <span className="min-w-0 truncate"><Typed text={act.line} /></span>
+        </div>
+      )}
+      {act.kind === "quiet" && (
+        <div className="mt-2 text-[12.5px] leading-snug text-[var(--muted)]">
+          Nothing new in its session for {span(act.for)}. Last: {act.line}. It may be waiting on someone, or stopped.
+        </div>
+      )}
+      {act.kind === "unseen" && (
+        <div className="mt-2 text-[12.5px] leading-snug text-[var(--muted)]">
+          {Date.now() - agent.since < 120e3 ? "Waiting for the session to start on it." : "Scout lists it as running, but Rounds can't find that session's work on this Mac, so it can't say whether anything is happening."}
+        </div>
+      )}
+    </div>
   );
 }
 

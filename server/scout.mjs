@@ -19,6 +19,7 @@ import { execFile } from "node:child_process";
 import { CLAUDE, DATA, loadConfig, repoOf } from "./config.mjs";
 import { keepImage, which } from "./indexer.mjs";
 import { SENT, delivered, noteMessage } from "./notes.mjs";
+import { allLive, forget, liveOf, watch } from "./live.mjs";
 
 const log = (s) => console.log(`[rounds] scout: ${s}`);
 // the stamp the canvas asks after every few seconds for notes: a pin changes with each step
@@ -113,7 +114,10 @@ export async function deliver(c, idx) {
     fs.mkdirSync(SENT, { recursive: true });
     fs.writeFileSync(sent, JSON.stringify({ delivery: "scout", pending: true, address: to.address, at: Date.now() }));
     changed();
-    const { json, why } = await scout(["ask", "--to", to.address, "--label", "rounds", noteMessage([c])], 60e3);
+    const res = await scout(["ask", "--to", to.address, "--label", "rounds", noteMessage([c])], 60e3);
+    const { json } = res;
+    // without a receipt (or a message id) nothing says the session got it
+    const why = res.why || (!json?.receipt && !json?.messageId ? "Scout gave no receipt" : json?.receipt?.ok === false ? json.receipt.reason || json.receipt.state || "Scout refused it" : null);
     if (why) {
       note(c, "failed", why);
       unclaim();
@@ -157,7 +161,10 @@ async function toNewSession(c, idx, sent) {
   fs.mkdirSync(SENT, { recursive: true });
   fs.writeFileSync(sent, JSON.stringify({ delivery: "scout-new", pending: true, at: Date.now() }));
   changed();
-  const { json, why } = await scout(["ask", "--project", repo, "--harness", "claude", "--label", "rounds", noteMessage([c], undefined, { opener, final: true })], 120e3);
+  const res = await scout(["ask", "--project", repo, "--harness", "claude", "--label", "rounds", noteMessage([c], undefined, { opener, final: true })], 120e3);
+  const { json } = res;
+  // no receipt, or one that says no, means no session took it, however Scout exited
+  const why = res.why || (!json?.receipt ? "Scout gave no receipt for the new session" : json.receipt.ok === false ? json.receipt.reason || json.receipt.state || "Scout refused it" : null);
   if (why) {
     note(c, "failed", why);
     try { if (JSON.parse(fs.readFileSync(sent, "utf8")).pending) fs.rmSync(sent, { force: true }); } catch {}
@@ -226,14 +233,20 @@ async function follow(list) {
     }
     // a note sent or moved on in the last quarter hour is looked at every few seconds
     const trail = trailOf(c.id);
-    const fresh = Date.now() - Math.max(s.at || 0, trail.at(-1)?.at || 0) < FRESH;
+    // (and one whose agent is still writing)
+    const fresh = Date.now() - Math.max(s.at || 0, trail.at(-1)?.at || 0, liveOf(c.id)?.at || 0) < FRESH;
     if (Date.now() - (looked.get(c.id) || 0) < (fresh ? 3e3 : 60e3)) continue;
     looked.set(c.id, Date.now());
     // a session that handed the note on is followed to the one that took it
     const task = s.following || s.task;
     const work = await workOf(task);
     if (!work) continue;
-    if (WORKING.includes(work.state)) step(c.id, { what: "working", task });
+    if (WORKING.includes(work.state)) {
+      step(c.id, { what: "working", task });
+      // what it's actually doing, from its transcript: Scout's "running" alone proves nothing
+      const hand = s.following ? trail.filter((x) => x.what === "handed-off").at(-1) : null;
+      watch(c.id, s.at || 0, work.assignee?.cwd || hand?.project || s.project, s.following);
+    } else forget(c.id);
     if (work.state === "completed" && work.answer) {
       const next = await handedTo(String(work.answer), work);
       if (next) {
@@ -255,6 +268,8 @@ export function underWay() {
   let names;
   try { names = fs.readdirSync(SENT); } catch { return false; }
   const now = Date.now();
+  // an agent still writing keeps the canvas looking every few seconds, however long it takes
+  for (const v of Object.values(allLive())) if (now - (v.at || 0) < FRESH) return true;
   for (const f of names) {
     if (!f.endsWith(".json")) continue;
     try {

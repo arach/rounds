@@ -108,7 +108,15 @@ The pin always says where a note stands: sent, on its way, or waiting and why (S
 reach the session, or Scout refused the send). Each step is kept in `~/.rounds/trail`, so a
 refresh or a restart tells the same story, and the pin lists them. A session that answers on
 the Scout task instead of with `rounds_reply` (a new session has no Rounds tools) still gets
-its answer onto the pin, with the screens it names kept in the store. Rounds tries waiting notes again every half
+its answer onto the pin, with the screens it names kept in the store.
+
+While a note is out, Rounds reads the transcript of the session that got it (the one whose
+prompt carried the note, or after a handoff, the one in the new task's repo whose brief names
+it) and shows what the agent is doing: dots and the repo's name by the pin, and in the note's
+panel the agent's current step ("Editing Board.tsx", "Running the build") typed out with a
+cursor. Dots move only while that transcript is moving, or while a tool call it made is still
+out. A session that has gone quiet says so ("quiet", "no sign of work"), however long Scout
+lists its task as running. Rounds tries waiting notes again every half
 minute. Set `"scout": false` in the config to turn Scout off, `"scout": "wake"` to first reopen
 a session Scout can resume, or `"newSession": false` to keep a closed session's notes waiting
 for your next message there instead.

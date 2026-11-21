@@ -13,6 +13,7 @@ import { pastPushes, importPushes } from "./history.mjs";
 import { applyMoves, fileTopics, filePostTopics, loadTopics } from "./topics.mjs";
 import { POSTS, projects, loadConfig } from "./config.mjs";
 import { deliver as byScout, sweep as scoutSweep, scoutOn, scoutStatus, trailOf, underWay } from "./scout.mjs";
+import { allLive } from "./live.mjs";
 import { CLAUDE } from "./config.mjs";
 
 // Whether the notes hook is in Claude's settings: without it, a note Scout can't carry has no
@@ -368,6 +369,8 @@ export async function handle(req, res, next) {
             // a note added or answered changes the list; one delivered adds a file to sent/
             return json(res, { posted: t(path.join(DATA, "posted")), comments: Math.max(t(COMMENTS), t(SENT), t(path.join(DATA, "noted"))) });
           }
+          // what each agent with a note is doing right now, asked every few seconds while one is out
+          if (p === "/api/live") return json(res, { now: Date.now(), notes: allLive() });
           // A file dropped on the canvas: an image joins its project as a screen, an HTML file
           // as a page.
           if (p === "/api/drop" && req.method === "POST") {

@@ -4,10 +4,24 @@
 import { useEffect, useRef, useState } from "react";
 import { clean, when, type Comment, type Index } from "./data";
 import { Glyph } from "./glyphs";
-import { whereTo } from "./Stage";
+import { agentLine, Dots, isBusy, Typed, useAgent, whereTo } from "./Stage";
 
 /** Still waiting on its session: not answered, not kept here for good. */
 export const underWay = (c: Comment) => !c.reply && c.state !== "kept";
+
+/** Where a note stands, in its row: what its agent is doing right now, or where it went. */
+function RowState({ note, live }: { note: Comment; live: boolean }) {
+  const agent = useAgent(note);
+  const busy = isBusy(agent);
+  return (
+    <span className="mt-0.5 flex items-center gap-2 text-[12px] leading-snug" style={{ color: busy ? "var(--ink)" : live ? "var(--ink)" : "var(--muted)" }}>
+      {busy && <Dots size={4} />}
+      <span className="min-w-0 truncate">
+        {agent ? <>{agent.where ? `${agent.where} · ` : ""}{busy ? <Typed text={agentLine(agent)} /> : agentLine(agent)}</> : whereTo(note)}
+      </span>
+    </span>
+  );
+}
 
 /** What a note was pinned on, in a few words. */
 function onWhat(c: Comment, index: Index) {
@@ -84,7 +98,7 @@ export function NotesKey({ index, onOpen }: { index: Index; onOpen: (c: Comment)
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-[520]">{c.text}</span>
                       <span className="block truncate text-[12px] text-[var(--muted)]">{onWhat(c, index)}</span>
-                      <span className="mt-0.5 block text-[12px] leading-snug" style={{ color: live ? "var(--ink)" : "var(--muted)" }}>{whereTo(c)}</span>
+                      <RowState note={c} live={live} />
                     </span>
                     <span className="type-mono mt-[3px] shrink-0 text-[11px] text-[var(--quiet)]">{when(c.trail?.at(-1)?.at ?? c.at)}</span>
                   </button>
