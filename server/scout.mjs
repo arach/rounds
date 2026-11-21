@@ -70,7 +70,7 @@ const carrying = new Set();
 const tried = new Map();
 // Each note's trail, kept in ~/.rounds/trail/<id>.json so its pin tells the same story after a
 // refresh or a restart: every step Scout took with it, oldest first. A step is
-//   { what: "unreachable" | "failed" | "sent" | "new-session" | "answered" | "unanswered", at, ... }
+//   { what: "unreachable" | "failed" | "sent" | "new-session" | "handed-off" | "answered" | "unanswered", at, ... }
 // and a step repeated (the sweep finding a session still closed) is written once.
 const TRAIL = path.join(DATA, "trail");
 export function trailOf(id) {
@@ -78,7 +78,7 @@ export function trailOf(id) {
 }
 function step(id, ev) {
   const list = trailOf(id);
-  if (list.at(-1)?.what === ev.what && list.at(-1)?.why === ev.why) return false;
+  if (list.at(-1)?.what === ev.what && list.at(-1)?.why === ev.why && list.at(-1)?.task === ev.task) return false;
   list.push({ ...ev, at: ev.at || Date.now() });
   try { fs.mkdirSync(TRAIL, { recursive: true }); fs.writeFileSync(path.join(TRAIL, `${id}.json`), JSON.stringify(list, null, 1)); } catch {}
   changed();
@@ -144,7 +144,7 @@ async function toNewSession(c, idx, sent) {
   const t = (idx.threads || []).find((x) => x.id === c.thread);
   const cwd = t?.cwd;
   if (!cwd) return false;
-  const repo = repoOf(cwd);
+  const repo = repoOf(ownerOf(cwd) || cwd);
   if (!fs.existsSync(repo)) return false;
   const old = sessionsOf(c.thread, idx)[0];
   const transcript = old && findTranscript(old);
@@ -170,6 +170,25 @@ async function toNewSession(c, idx, sent) {
   step(c.id, { what: "new-session", project: repo, ...(task ? { task } : {}) });
   log(`note ${c.id}: its session is closed, so a new Claude session in ${repo} took it`);
   return true;
+}
+
+// A session that ran in another session's scratchpad (/private/tmp/claude-<uid>/<project>/
+// <session id>/scratchpad/...) made its work for that session's project: the folder that
+// session ran in, from its transcript. A scratch folder is never where a change belongs.
+function ownerOf(dir) {
+  const id = String(dir).match(/\/claude-\d+\/[^/]+\/([0-9a-f]{8}-[0-9a-f-]{27})\/scratchpad(?:\/|$)/)?.[1];
+  const file = id && findTranscript(id);
+  if (!file) return null;
+  try {
+    const head = fs.readFileSync(file, "utf8").slice(0, 400e3);
+    for (const line of head.split("\n")) {
+      const at = line.indexOf('"cwd":"');
+      if (at < 0) continue;
+      const cwd = JSON.parse(`"${line.slice(at + 7).match(/^((?:[^"\\]|\\.)*)"/)?.[1] ?? ""}"`);
+      if (cwd && !cwd.includes("/scratchpad")) return cwd;
+    }
+  } catch {}
+  return null;
 }
 
 // A Claude Code session's transcript, by its id, wherever its project folder is.
@@ -207,12 +226,40 @@ async function follow(list) {
     }
     if (Date.now() - (looked.get(c.id) || 0) < 60e3) continue;
     looked.set(c.id, Date.now());
-    const { json } = await scout(["status", s.task], 30e3);
-    const work = (json?.work || []).find((w) => (w.handles || []).includes(s.task) || w.id === s.task);
+    // a session that handed the note on is followed to the one that took it
+    const task = s.following || s.task;
+    const work = await workOf(task);
     if (!work) continue;
-    if (work.state === "completed" && work.answer) answer(c.id, String(work.answer), work.updatedAt);
-    else if (["failed", "cancelled", "canceled", "expired"].includes(work.state)) step(c.id, { what: "unanswered", why: work.reason || work.state });
+    if (work.state === "completed" && work.answer) {
+      const next = await handedTo(String(work.answer), work);
+      if (next) {
+        step(c.id, { what: "handed-off", task: next.id, ...(next.assignee?.cwd ? { project: next.assignee.cwd } : {}), said: String(work.answer).slice(0, 4000) });
+        fs.writeFileSync(path.join(SENT, `${c.id}.json`), JSON.stringify({ ...s, following: next.id }));
+        looked.delete(c.id);
+        log(`note ${c.id} was handed on to ${next.agentId || next.id}${next.assignee?.cwd ? ` in ${next.assignee.cwd}` : ""}`);
+        continue;
+      }
+      answer(c.id, String(work.answer), work.updatedAt);
+    } else if (["failed", "cancelled", "canceled", "expired"].includes(work.state)) step(c.id, { what: "unanswered", why: work.reason || work.state, task });
   }
+}
+
+async function workOf(handle) {
+  const { json } = await scout(["status", handle], 30e3);
+  return (json?.work || []).find((w) => (w.handles || []).includes(handle) || w.id === handle) || null;
+}
+
+// An answer that names another Scout task still under way ("next owner: … (ref:q-c1bkte)") is
+// a handoff, not the answer: the note's answer is what that task ends with.
+const HANDLE = /\b(?:ref:)?((?:q|flt|inv-request)-[a-z0-9]+(?:-[a-z0-9]+)?)\b/g;
+async function handedTo(said, from) {
+  const own = new Set([from.id, ...(from.handles || [])]);
+  for (const m of said.matchAll(HANDLE)) {
+    if (own.has(m[1])) continue;
+    const w = await workOf(m[1]);
+    if (w && !own.has(w.id) && !["failed", "cancelled", "canceled", "expired"].includes(w.state)) return w;
+  }
+  return null;
 }
 
 function answer(id, said, at = Date.now()) {

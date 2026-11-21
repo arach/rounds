@@ -16,8 +16,8 @@ export type Comment = {
   trail?: TrailStep[];
 };
 export type TrailStep = {
-  what: "unreachable" | "failed" | "sent" | "new-session" | "answered" | "unanswered";
-  at: number; why?: string; to?: string; project?: string; task?: string; screens?: number;
+  what: "unreachable" | "failed" | "sent" | "new-session" | "handed-off" | "answered" | "unanswered";
+  at: number; why?: string; to?: string; project?: string; task?: string; screens?: number; said?: string;
 };
 export type Shot = { hash: string; ext: string; w: number; h: number; name: string };
 /** A set of screens a thread showed him in one go, with the caption it gave them. */

@@ -362,9 +362,13 @@ function Compare({ before, after, changes, pageH, scale, wipe, setWipe, animate 
 /** Where a note goes, in a line: to its session now, with the next message there, or nowhere. */
 function whereTo(note: Comment) {
   const to = note.threadTitle ? `“${note.threadTitle}”` : "its session";
-  if (note.reply && note.delivery === "scout-new") return `A new session in ${note.sentTo || "its repo"} replied, for ${to}`;
+  const handed = note.trail?.filter((t) => t.what === "handed-off").at(-1);
+  const where = (p?: string) => (p ? p.split("/").filter(Boolean).pop() : "its repo");
+  if (note.reply && handed) return `A session in ${where(handed.project)} replied`;
+  if (note.reply && note.delivery === "scout-new") return `A new session in ${note.sentTo || "its repo"} replied`;
   if (note.reply) return note.threadTitle ? `“${note.threadTitle}” replied` : "Its session replied";
-  if (note.state === "sent" && note.delivery === "scout-new") return `${to} was closed, so a new session in ${note.sentTo || "its repo"} took it, through Scout`;
+  if (handed) return `Handed on to a session in ${where(handed.project)}; waiting for its answer`;
+  if (note.state === "sent" && note.delivery === "scout-new") return `Its session was closed, so a new session in ${note.sentTo || "its repo"} took it, through Scout`;
   if (note.state === "sent") return note.delivery === "scout" ? `Sent to ${to} through Scout` : `Sent to ${to}`;
   if (note.state === "kept" || note.route === "kept") return note.thread ? "Stays here: its session is no longer on this Mac" : "Stays here: no session made this";
   if (note.route === "relay") return `On its way to ${to}`;
@@ -385,6 +389,7 @@ function trailLine(t: TrailStep) {
     case "failed": return `Scout couldn't send it${t.why ? `: ${t.why.slice(0, 80)}` : ""}`;
     case "sent": return "sent to its session through Scout";
     case "new-session": return `a new session in ${base(t.project)} took it`;
+    case "handed-off": return `handed on to a session in ${base(t.project)}`;
     case "answered": return `answered${t.screens ? `, with ${t.screens} screen${t.screens === 1 ? "" : "s"}` : ""}`;
     case "unanswered": return `ended without an answer${t.why ? ` (${t.why})` : ""}`;
   }
@@ -469,6 +474,11 @@ function NotePanel({ n, note, onClose }: { n: number; note: Comment; onClose: ()
                 ))}
               </div>
             )}
+          </>
+        ) : note.trail?.some((t) => t.what === "handed-off") ? (
+          <>
+            <div className="text-[13px] font-medium text-[var(--muted)]">Still in progress. Where it was handed on:</div>
+            <div className="mt-2 whitespace-pre-line text-[14px] leading-[1.6] text-[var(--muted)]">{note.trail.filter((t) => t.what === "handed-off").at(-1)?.said}</div>
           </>
         ) : (
           <div className="text-[14px] text-[var(--muted)]">No answer yet.</div>
